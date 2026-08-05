@@ -24,7 +24,7 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 
 ## ✨ 版本更新
 
-## 当前最新版本为 `V1.2.0`。
+## 当前最新版本为 `V1.2.5`。
 
 <details open>
 <summary>🏗️ V1.x.x 系列（点击展开 / 收起）</summary>
@@ -78,6 +78,18 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 - **新增分级类目体系**：13 大类 × 65 中类 × 227 小类三级类目，新增 `category` 表（306 个类目节点）
 - **入库自动分类**：商品导入时按中文关键词自动归类；商品知识库向量同步标注类目
 - **商品表新增类目字段**：`category_big` / `category_small` / `category_path`；`kb_chunks.meta_data` 同步类目字段
+
+</details>
+
+<!-- ================= V1.2.5 ================= -->
+<details>
+<summary>🏷️ V1.2.5 — 检索分级过滤（点击展开）</summary>
+
+#### 🔧 更新内容
+- **删除外部平台类目 ID 属性列**：`product_catalog.category_id` 列移除
+- **meta_data 调整**：`kb_chunks.meta_data` 取消 `category_id`、`product_ids` 字段，类目过滤改由 `category_big` / `category_small` / `category_path` 承担
+- **产品信息检索分级过滤**：按商品信息表字段逐级收紧（SKU → 名称 → 大类 → 小类 → 类目路径 → 价格区间 → 库存状态），条件参数化防注入
+- **新增类目过滤索引**：`idx_product_category_big` / `idx_product_category_small` / `idx_product_category_path`
 
 </details>
 
