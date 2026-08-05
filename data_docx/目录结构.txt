@@ -1,0 +1,83 @@
+电商AI智能客服/
+├── .env                           # 环境变量（数据库、API密钥等）
+├── .gitignore                     # 忽略 .env / .pylib / 缓存（防密钥泄漏）
+├── requirements.txt               # Python依赖
+├── README.md                      # 项目说明
+│
+├── frontend/                      # 前端（React+Vite+AntD，功能验证用，无需登录）
+│   ├── package.json               # 依赖与脚本（dev / build / preview）
+│   ├── vite.config.js             # 开发服务器 + 后端代理（/v1 /rag /admin → :8000）
+│   ├── index.html
+│   └── src/
+│       ├── main.jsx               # 入口（antd 中文语言包）
+│       ├── App.jsx                # 布局与导航（聊天 / RAG / 管理）
+│       ├── api.js                 # 后端接口封装
+│       └── pages/
+│           ├── ChatPage.jsx       # 客服聊天验证（SSE 流式 + 意图/工具展示）
+│           ├── RagPage.jsx        # RAG 检索验证（Top-K/阈值/类型过滤）
+│           └── AdminPage.jsx      # 管理员：知识库上传（TXT/PDF）+ 商品同步（CSV）
+│
+├── config/                        # 配置管理
+│   └── settings.py                # 使用Pydantic Settings加载环境变量
+│
+├── src/                           # 核心源码
+│   ├── offline/                   # 离线数据工程（阶段一）
+│   │   ├── etl/                   # 数据抽取、清洗、转换、向量化
+│   │   │   ├── product_import.py  # 商品数据导入（已有代码）
+│   │   │   ├── knowledge_import.py# 售后政策、FAQ等文档导入
+│   │   │   ├── chunking.py        # 文本分块策略（复用langchain）
+│   │   │   ├── embedding.py       # 调用OpenAI Embedding接口
+│   │   │   └── translator.py      # 非中文文本翻译（已有）
+│   │   └── data/                  # 存放原始CSV、TXT等数据文件
+│   │       ├── shopee-products.csv
+│   │       ├── return_policy.txt
+│   │       └── faq.txt
+│   │
+│   ├── online/                    # 在线服务（阶段二~五）
+│   │   ├── api/                   # FastAPI路由层
+│   │   │   ├── main.py            # FastAPI 应用入口（阶段二 RAG / 阶段三 Agent）
+│   │   │   ├── routes/
+│   │   │   │   ├── chat.py        # /v1/chat/text（阶段三：意图识别+工具路由+流式回复）
+│   │   │   │   ├── rag.py         # /rag/search（阶段二：混合检索 Top-K 接口）
+│   │   │   │   └── admin.py       # 管理接口：知识库上传（TXT/PDF）+ 商品同步（CSV）
+│   │   │   ├── dependencies.py    # 依赖注入（数据库会话等）
+│   │   │   └── models.py          # Pydantic请求/响应模型
+│   │   │
+│   │   ├── core/                  # 核心业务逻辑（无FastAPI依赖）
+│   │   │   ├── agent/             # 意图识别与路由（阶段三）
+│   │   │   │   ├── router.py      # 意图识别与路由：工具调用分发逻辑
+│   │   │   │   ├── tools.py       # 意图识别与路由：function-calling schema定义
+│   │   │   │   └── intent.py      # 意图识别与路由：意图识别（LLM调用）
+│   │   │   ├── rag/               # RAG混合检索引擎（阶段二）
+│   │   │   │   ├── retriever.py   # BM25 + 向量双路召回
+│   │   │   │   ├── reranker.py    # 重排序，根据相似度值和其他内部相关设定
+│   │   │   │   └── context_builder.py # 上下文组装
+│   │   │   ├── llm/               # LLM交互封装
+│   │   │   │   ├── client.py      # 统一调用（DeepSeek：chat/流式/function calling）
+│   │   │   │   └── prompt_templates.py # Prompt模板
+│   │   │   └── voice/             # 语音处理（阶段四）
+│   │   │       ├── asr.py         # ASR集成（阿里/讯飞等）
+│   │   │       └── tts.py         # TTS合成
+│   │   │
+│   │   ├── db/                    # 数据库层
+│   │   │   ├── session.py         # 会话管理
+│   │   │   ├── models.py          # SQLAlchemy ORM模型（与表结构对应）
+│   │   │   ├── schema.sql         # 建表DDL脚本（与《数据库设计手册》表结构对应，含pgvector扩展与索引）
+│   │   │   └── repositories/      # 数据访问层
+│   │   │       ├── product_repo.py
+│   │   │       ├── inventory_repo.py
+│   │   │       └── kb_repo.py
+│   │   │
+│   │   └── services/              # 服务编排层（整合core各模块）
+│   │       ├── chat_service.py    # 文本对话服务
+│   │       └── audio_chat_service.py # 语音对话服务
+│   │
+│   └── common/                    # 通用工具
+│       ├── logger.py              # 日志配置
+│       ├── exceptions.py          # 自定义异常
+│       ├── utils.py               # 辅助函数
+│       └── constants.py           # 业务常量（如doc_type）
+│
+├── tests/                         # 单元测试
+│   ├── offline/
+│   └── online/
