@@ -46,6 +46,10 @@ def _fill_default_arguments(
     category 等）时不覆盖。
     """
     args = dict(arguments) if isinstance(arguments, dict) else {}
+    # 商品推荐：无论模型是否给了筛选条件，都保证有可检索的商品关键词（用户原话兜底）
+    if tool_name == "product_recommendation":
+        args.setdefault("product_name", query)
+        return args
     # 检索主键：这些键任一存在即视为"模型已给出可检索参数"
     main_keys = {
         "query", "question", "text", "keyword",
@@ -56,9 +60,10 @@ def _fill_default_arguments(
     }
     if (set(args) - {"_raw"}) & main_keys:
         return args
-    if tool_name in ("get_product_price", "get_product_inventory"):
+    if tool_name in ("get_product_price", "get_product_inventory", "product_recommendation"):
+        # 结构化检索工具：注入用户原话作为商品关键词
         args["product_name"] = query
-    elif tool_name in ("get_knowledge_base", "product_recommendation"):
+    elif tool_name in ("get_knowledge_base",):
         args["query"] = query
     return args
 
