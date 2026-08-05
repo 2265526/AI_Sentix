@@ -1,7 +1,7 @@
 # AI_Sentix
 Al_Sentix-—电商系统AI智能客服（含语音链路）
 
-为电商平台提供智能化客服，减少人工投入，支持文字/语音问询，精准意图识别、工具调用、知识库召回、流式输出
+为电商平台提供智能化客服，减少人工投入，支持文字/语音问询、语音对话，精准意图识别、工具调用、知识库召回、流式输出
 
 技术实现：自研RAG框架（chunking+hybrid retrieval + rerank)+DeepSeek API集成+ASR（语音识别)→ LLM→ TTS（语 音合成）完整多模态链路+错误fallback机制+FastAPI服务化。
 
@@ -18,13 +18,15 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 | 语义检索 | pgvector 余弦距离（`<=>`）+ HNSW 索引 |
 | 文本处理 | langchain `RecursiveCharacterTextSplitter`（分块）· pypdf（PDF）· python-docx（DOCX） |
 | 前端 | **React 18** · **Vite 5** · **Ant Design 5** · axios（SSE 用 fetch ReadableStream） |
+| 语音识别（ASR） | **faster-whisper**（本地离线small 模型，PyAV 解码 wav/mp3/ogg/webm） |
+| 语音合成（TTS） | **edge-tts**（微软在线接口，服务端调用；中文音色晓晓/云希/云健等） |
 
 | 自研RAG 框架（召回 → 融合 → Rerank → 上下文组装），使用 langchain 的文本分块工具；向量检索基于 pgvector 原生 SQL。
 
 
 ## ✨ 版本更新
 
-## 当前最新版本为 `V1.2.5`。
+## 当前最新版本为 `V2.0.0`。
 
 <details open>
 <summary>🏗️ V1.x.x 系列（点击展开 / 收起）</summary>
@@ -86,10 +88,23 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 <summary>🏷️ V1.2.5 — 检索分级过滤（点击展开）</summary>
 
 #### 🔧 更新内容
-- **删除外部平台类目 ID 属性列**：`product_catalog.category_id` 列移除
+- **删除外部平台类目 ID 属性列**：`product_catalog.category_id` 列移除（含导入、检索、建表 SQL 全部读写逻辑）
 - **meta_data 调整**：`kb_chunks.meta_data` 取消 `category_id`、`product_ids` 字段，类目过滤改由 `category_big` / `category_small` / `category_path` 承担
 - **产品信息检索分级过滤**：按商品信息表字段逐级收紧（SKU → 名称 → 大类 → 小类 → 类目路径 → 价格区间 → 库存状态），条件参数化防注入
 - **新增类目过滤索引**：`idx_product_category_big` / `idx_product_category_small` / `idx_product_category_path`
+
+</details>
+
+<!-- ================= V2.0.0 ================= -->
+<details>
+<summary>🏷️ V2.0.0 — 多模态语音链路（点击展开）</summary>
+
+#### 🔧 更新内容
+- **语音链路**：音频 → ASR → LLM → TTS 全链路
+- **ASR**：本地 `faster-whisper`（small，单例缓存，首次加载约 30~60s）
+- **TTS**：`edge-tts`（微软在线接口，服务端调用，中文音色晓晓/云希等）
+- **新接口**：`POST /v1/chat/audio`（上传录音 → 返回 mp3 音频流，识别文本/回复经响应头返回）
+- **前端**：聊天页新增「语音提问」按钮（录音 → 识别 → 播放回复语音）
 
 </details>
 
