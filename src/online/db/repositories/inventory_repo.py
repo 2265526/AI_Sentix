@@ -5,6 +5,17 @@ db/repositories/inventory_repo.py —— 库存与物流数据访问层
 阶段三结构化检索（查库存/物流时效）用：
 product_catalog + inventory_logistics 联表，按 SKU 精确 / 名称模糊查询。
 
+V1.2.5 起支持「分级过滤」检索（与 product_repo 同规则，参考《数据库设计手册》商品信息表）：
+    一级  sku_code        精确匹配
+    二级  product_name    名称关键词模糊匹配（ILIKE）
+    三级  category_big    大类（中文）精确过滤
+    四级  category_small  小类（中文）精确过滤
+    五级  category_path   类目完整路径模糊匹配（ILIKE，含前缀）
+    六级  min_price / max_price  价格区间过滤
+    七级  in_stock_only   仅返回有库存商品
+规则：已提供的条件全部生效（AND 逐级收紧），未提供的条件自动跳过；
+无任何过滤条件时返回空列表（避免全表扫描）。
+
 安全：所有条件参数化绑定，LIKE 模式经参数传入。
 """
 from typing import Any, Dict, List, Optional
@@ -19,24 +30,87 @@ def _like_pattern(keyword: str) -> str:
     return f"%{escaped}%"
 
 
+def _filters(
+    sku_code: Optional[str] = None,
+    product_name: Optional[str] = None,
+    category_big: Optional[str] = None,
+    category_small: Optional[str] = None,
+    category_path: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    in_stock_only: bool = False,
+):
+    """按「分级过滤规则」动态拼装 WHERE 条件与参数（全部参数化绑定）。"""
+    clauses: List[str] = []
+    params: List[Any] = []
+
+    if sku_code:
+        clauses.append("p.sku_code = %s")
+        params.append(sku_code)
+
+    if product_name:
+        clauses.append("p.product_name ILIKE %s ESCAPE '\\'")
+        params.append(_like_pattern(product_name))
+
+    if category_big:
+        clauses.append("p.category_big = %s")
+        params.append(category_big)
+
+    if category_small:
+        clauses.append("p.category_small = %s")
+        params.append(category_small)
+
+    if category_path:
+        clauses.append("p.category_path ILIKE %s ESCAPE '\\'")
+        params.append(_like_pattern(category_path))
+
+    if min_price is not None:
+        clauses.append("p.price >= %s")
+        params.append(min_price)
+
+    if max_price is not None:
+        clauses.append("p.price <= %s")
+        params.append(max_price)
+
+    if in_stock_only:
+        clauses.append("i.stock_quantity > 0")
+
+    return clauses, params
+
+
 def search_inventory(
     conn,
     sku_code: Optional[str] = None,
     product_name: Optional[str] = None,
+    category_big: Optional[str] = None,
+    category_small: Optional[str] = None,
+    category_path: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    in_stock_only: bool = False,
     limit: int = _MAX_RESULTS,
 ) -> List[Dict[str, Any]]:
     """
-    联表查询商品 + 库存 + 物流信息。
-
-    Args:
-        sku_code: SKU 精确匹配（优先级最高）
-        product_name: 名称关键词模糊匹配
+    联表查询商品 + 库存 + 物流信息（分级过滤，规则同 product_repo.search_products）。
 
     Returns:
         [{product_id, sku_code, product_name, price, stock_quantity,
           warehouse_location, delivery_estimate_days}, ...]
     """
-    sql = """
+    clauses, params = _filters(
+        sku_code=sku_code,
+        product_name=product_name,
+        category_big=category_big,
+        category_small=category_small,
+        category_path=category_path,
+        min_price=min_price,
+        max_price=max_price,
+        in_stock_only=in_stock_only,
+    )
+    if not clauses:
+        return []
+
+    sql = f"""
         SELECT p.id          AS product_id,
                p.sku_code,
                p.product_name,
@@ -46,17 +120,12 @@ def search_inventory(
                i.delivery_estimate_days
         FROM product_catalog p
         LEFT JOIN inventory_logistics i ON i.product_id = p.id
-        WHERE (
-              (%s::text IS NOT NULL AND p.sku_code = %s)
-           OR (%s::text IS NOT NULL AND p.product_name ILIKE %s ESCAPE '\\')
-        )
+        WHERE {' AND '.join(clauses)}
         ORDER BY p.id
         LIMIT %s
     """
-    name_pat = _like_pattern(product_name) if product_name else None
-    params = (sku_code, sku_code, name_pat, name_pat, limit)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, params)
+        cur.execute(sql, params + [limit])
         rows = cur.fetchall()
     return [
         {
