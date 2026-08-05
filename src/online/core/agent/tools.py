@@ -28,7 +28,8 @@ TOOLS: List[Dict[str, Any]] = [
             "name": "get_product_inventory",
             "description": "查询商品库存数量与物流时效（预计送达天数、仓库位置）。"
                            "用户询问'有货吗''库存''几天能到''哪个仓'时使用。"
-                           "可按 SKU 精确查询，或按商品名称模糊查询。",
+                           "可按 SKU 精确查询、按商品名称模糊查询，"
+                           "也可按大类/小类/类目路径分级过滤，或用价格区间、有货状态进一步筛选。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -40,6 +41,30 @@ TOOLS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "商品名称关键词，模糊匹配（如：连衣裙、手机壳）",
                     },
+                    "category_big": {
+                        "type": "string",
+                        "description": "大类过滤（如：服装鞋包）",
+                    },
+                    "category_small": {
+                        "type": "string",
+                        "description": "小类过滤（如：衬衫）",
+                    },
+                    "category_path": {
+                        "type": "string",
+                        "description": "类目完整路径过滤（如：服装鞋包/女装/衬衫）",
+                    },
+                    "min_price": {
+                        "type": "number",
+                        "description": "最低价格过滤（元）",
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": "最高价格过滤（元）",
+                    },
+                    "in_stock_only": {
+                        "type": "boolean",
+                        "description": "是否仅返回有库存商品",
+                    },
                 },
                 "required": [],
             },
@@ -50,7 +75,8 @@ TOOLS: List[Dict[str, Any]] = [
         "function": {
             "name": "get_product_price",
             "description": "查询商品售价。用户询问'多少钱''价格''售价'时使用。"
-                           "可按 SKU 精确查询，或按商品名称模糊查询。",
+                           "可按 SKU 精确查询、按商品名称模糊查询，"
+                           "也可按大类/小类/类目路径分级过滤，或用价格区间、有货状态进一步筛选。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -61,6 +87,30 @@ TOOLS: List[Dict[str, Any]] = [
                     "product_name": {
                         "type": "string",
                         "description": "商品名称关键词，模糊匹配",
+                    },
+                    "category_big": {
+                        "type": "string",
+                        "description": "大类过滤（如：服装鞋包）",
+                    },
+                    "category_small": {
+                        "type": "string",
+                        "description": "小类过滤（如：衬衫）",
+                    },
+                    "category_path": {
+                        "type": "string",
+                        "description": "类目完整路径过滤（如：服装鞋包/女装/衬衫）",
+                    },
+                    "min_price": {
+                        "type": "number",
+                        "description": "最低价格过滤（元）",
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": "最高价格过滤（元）",
+                    },
+                    "in_stock_only": {
+                        "type": "boolean",
+                        "description": "是否仅返回有库存商品",
                     },
                 },
                 "required": [],

@@ -25,6 +25,13 @@ _KEY_ALIASES: Dict[str, tuple] = {
     "product_name": ("product_name", "product", "name", "title", "goods"),
     "query": ("query", "question", "text", "keyword", "category", "product_type", "type", "需求"),
     "doc_type": ("doc_type", "type"),
+    # V1.2.5 分级过滤参数（结构化商品检索）
+    "category_big": ("category_big", "big_category", "大类"),
+    "category_small": ("category_small", "small_category", "sub_category", "小类"),
+    "category_path": ("category_path", "path", "category", "类目", "类目路径"),
+    "min_price": ("min_price", "price_min", "minPrice", "最低价"),
+    "max_price": ("max_price", "price_max", "maxPrice", "最高价"),
+    "in_stock_only": ("in_stock_only", "inStock", "有货", "仅看有货"),
 }
 
 # doc_type 白名单（与 kb_documents.doc_type 数据一致）
@@ -40,6 +47,43 @@ def _arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
         if isinstance(val, str) and val.strip():
             return val
     return None
+
+
+def _num_arg(arguments: Dict[str, Any], key: str) -> Optional[float]:
+    """数值型参数取值（价格区间等）：兼容数字与数字字符串；非法值返回 None。"""
+    if not isinstance(arguments, dict):
+        return None
+    for alias in _KEY_ALIASES.get(key, (key,)):
+        val = arguments.get(alias)
+        if isinstance(val, bool):
+            continue
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str) and val.strip():
+            try:
+                return float(val)
+            except ValueError:
+                continue
+    return None
+
+
+def _bool_arg(arguments: Dict[str, Any], key: str) -> bool:
+    """布尔型参数取值（有库存过滤等）：兼容 True/False 与常见真值字符串。"""
+    if not isinstance(arguments, dict):
+        return False
+    for alias in _KEY_ALIASES.get(key, (key,)):
+        val = arguments.get(alias)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return val > 0
+        if isinstance(val, str):
+            v = val.strip().lower()
+            if v in ("1", "true", "yes", "是", "有", "有货"):
+                return True
+            if v in ("0", "false", "no", "否", "无"):
+                return False
+    return False
 
 
 def _doc_type_arg(arguments: Dict[str, Any]) -> Optional[str]:
@@ -68,6 +112,12 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
             conn,
             sku_code=_arg(arguments, "sku_code"),
             product_name=_arg(arguments, "product_name"),
+            category_big=_arg(arguments, "category_big"),
+            category_small=_arg(arguments, "category_small"),
+            category_path=_arg(arguments, "category_path"),
+            min_price=_num_arg(arguments, "min_price"),
+            max_price=_num_arg(arguments, "max_price"),
+            in_stock_only=_bool_arg(arguments, "in_stock_only"),
         )
         return {
             "name": name,
@@ -80,6 +130,12 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
             conn,
             sku_code=_arg(arguments, "sku_code"),
             product_name=_arg(arguments, "product_name"),
+            category_big=_arg(arguments, "category_big"),
+            category_small=_arg(arguments, "category_small"),
+            category_path=_arg(arguments, "category_path"),
+            min_price=_num_arg(arguments, "min_price"),
+            max_price=_num_arg(arguments, "max_price"),
+            in_stock_only=_bool_arg(arguments, "in_stock_only"),
         )
         return {
             "name": name,
