@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from psycopg2.extensions import connection
 
 from src.online.db.session import get_db
+from src.offline.etl.category_classifier import classify_by_keywords
 from src.offline.etl.knowledge_importer import (
     get_embedding,
     read_text_file,
@@ -225,17 +226,24 @@ def import_products_csv(
     try:
         for row in rows:
             try:
+                # 自动分类：按商品名关键词判断大类/小类
+                category_big, category_small, category_path = classify_by_keywords(
+                    row["product_name"]
+                )
                 cur.execute(
                     """
-                    INSERT INTO product_catalog (sku_code, product_name, category_id, price, raw_description)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO product_catalog (sku_code, product_name, category_id, category_big, category_small, category_path, price, raw_description)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (sku_code) DO UPDATE SET
                         product_name = EXCLUDED.product_name,
+                        category_big = EXCLUDED.category_big,
+                        category_small = EXCLUDED.category_small,
+                        category_path = EXCLUDED.category_path,
                         price = EXCLUDED.price,
                         raw_description = EXCLUDED.raw_description
                     RETURNING id
                     """,
-                    (row["sku_code"], row["product_name"], row["category_id"], row["price"], row["raw_description"]),
+                    (row["sku_code"], row["product_name"], row["category_id"], category_big, category_small, category_path, row["price"], row["raw_description"]),
                 )
                 product_id = cur.fetchone()[0]
                 cur.execute(
@@ -259,6 +267,9 @@ def import_products_csv(
                         raw_content=kb_content,
                         meta_extra={
                             "category_id": row["category_id"],
+                            "category_big": category_big,
+                            "category_small": category_small,
+                            "category_path": category_path,
                             "product_ids": [product_id],
                             "product_skus": [row["sku_code"]],
                             "applicable_audience": "通用",
