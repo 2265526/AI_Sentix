@@ -1,0 +1,23 @@
+{
+  "name": "ecommerce-ai-cs-frontend",
+  "version": "0.4.0",
+  "private": true,
+  "description": "电商AI智能客服前端（验证用，无需登录）：聊天验证 / RAG 检索验证 / 管理员页（知识库上传、商品同步）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.5.1",
+    "antd": "^5.22.2",
+    "axios": "^1.7.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.10"
+  }
+}
