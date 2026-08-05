@@ -63,7 +63,7 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 <summary>🏷️ V1.1.0 — 功能修复与增强（点击展开）</summary>
 
 #### 🔧 更新内容
-- **商品 CSV 导入同步生成知识库向量**：结构化入库的同时为每个商品生成 `product_manual` 知识文档（商品名 + 描述 → 分块 → 向量化），中文内容直接入库、无需翻译，上传后立即可被 RAG 检索
+- **商品 CSV 导入同步生成知识库向量**：结构化入库的同时为每个商品生成 `product_manual` 知识文档（商品名 + 描述 → 分块 → 向量化），上传后立即可被 RAG 检索
 - **修复「未收录」误判**：意图识别工具参数键名波动（`query` / `category` / `product_type` 等）导致检索词缺失 → router 参数别名扩展 + intent 层自动注入用户原话兜底，检索不再落空
 - **修复前端聊天流式 token 重复与换行折叠**：移除 React StrictMode 对 setState updater 的双调用、消息渲染保留换行（`white-space: pre-wrap`）
 - **管理接口增强**：CORS 支持、知识库上传后自动重建 BM25 索引、`.gitignore` 密钥防护
