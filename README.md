@@ -5,4 +5,45 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 
 技术实现：自研RAG框架（chunking+hybrid retrieval + rerank)+OpenAI API集成+ASR（语音识别)→ LLM→ TTS（语 音合成）完整多模态链路+错误fallback机制+FastAPI服务化。
 
+## 🧰 技术栈
+
+| 层级 | 技术 |
+|---|---|
+| 后端框架 | Python 3.12 · **FastAPI** · uvicorn |
+| 数据库 | **PostgreSQL**（关系 + 向量同库）· **pgvector** 扩展（HNSW 索引，1024 维） |
+| 数据库驱动 | psycopg2（连接池 `SimpleConnectionPool`） |
+| Embedding | 本地 **Ollama** 的 `qwen3-embedding:0.6b`（1024 维，OpenAI 兼容接口） |
+| 大模型 | **DeepSeek**（`deepseek-chat`，openai SDK 兼容调用，function calling / 流式） |
+| 关键词检索 | **jieba** 分词 + **rank_bm25**（BM25Okapi） |
+| 语义检索 | pgvector 余弦距离（`<=>`）+ HNSW 索引 |
+| 文本处理 | langchain `RecursiveCharacterTextSplitter`（分块）· pypdf（PDF）· python-docx（DOCX） |
+| 前端 | **React 18** · **Vite 5** · **Ant Design 5** · axios（SSE 用 fetch ReadableStream） |
+
+| 自研RAG 框架（召回 → 融合 → Rerank → 上下文组装），使用 langchain 的文本分块工具；向量检索基于 pgvector 原生 SQL。
+
+
 电商系统AI智能客服V1.0----------更新
+
+## ✨ 功能特性
+
+### 1. RAG 知识库检索（混合检索 + 重排序）
+- **双路召回**：BM25 关键词检索（jieba 分词）+ 语义向量检索（pgvector 余弦距离，HNSW 索引）
+- **重排序**：双路分数加权融合，相关性阈值 0.4 过滤，Top-5 输出
+
+### 2. Agent 智能对话（意图识别 + 工具路由 + 流式回复）
+- **意图识别**：DeepSeek function calling 判断用户意图，自动容忍模型输出的参数键名波动
+- **4 个工具**：
+  | 工具 | 用途 | 检索方式 |
+  |---|---|---|
+  | `get_product_inventory` | 查库存/物流时效 | SQL（精确） |
+  | `get_product_price` | 查商品价格 | SQL（精确） |
+  | `get_knowledge_base` | 查售后/使用说明/FAQ | RAG（语义） |
+  | `product_recommendation` | 商品推荐 | RAG（语义） |
+- **二次模型回调**：工具结果 + 用户问题重新组装消息 → DeepSeek 流式生成最终回复（SSE）
+
+### 3. 管理员功能（Web 页面，无需登录）
+- **知识库文档管理**：上传 TXT / PDF，自动分块 + 向量化入库，上传后立即可被检索
+- **商品数据同步**：上传 CSV，增量同步商品/库存，并**同步为每个商品生成知识库向量
+
+### 4. Web 验证台（React + Ant Design）
+- 客服聊天页（SSE 流式展示）、RAG 检索验证页（Top-K/阈值/类型过滤）、管理员页
