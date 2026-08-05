@@ -334,7 +334,7 @@ def classify(text: str, breadcrumb: Optional[List[str]] = None) -> Tuple[str, st
 def ensure_category_tree(cur) -> Dict[Tuple[str, str], int]:
     """
     把 CATEGORY_TREE 幂等写入 category 表（存在则跳过）。
-    Returns: {(大类, 小类): category_id} 映射（用于商品关联）
+    Returns: {(大类, 小类): category 表类目节点 id} 映射（用于商品关联类目树）
     """
     mapping: Dict[Tuple[str, str], int] = {}
     for big, middles in CATEGORY_TREE.items():
