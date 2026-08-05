@@ -74,7 +74,7 @@ def _import_text_to_kb(
     """把整段文本分块、向量化并入库（幂等：同 source_url 先删旧数据）。
 
     Args:
-        meta_extra: 附加到 meta_data 的字段（如 product_ids / product_skus，
+        meta_extra: 附加到 meta_data 的字段（如 product_skus、类目字段，
                     对应《数据库设计手册》5. 数据字典标准结构）
 
     Returns: (文档数, 分块数)
@@ -192,7 +192,6 @@ def _parse_csv(content: bytes) -> List[dict]:
             {
                 "sku_code": sku[:50],
                 "product_name": str(r.get("title") or "未知商品")[:255],
-                "category_id": None,
                 "price": _num(r.get("final_price") or r.get("initial_price"), 0.0),
                 "raw_description": str(r.get("Product Description") or "")[:20000],
                 "stock_quantity": int(_num(r.get("stock"), 0)),
@@ -232,8 +231,8 @@ def import_products_csv(
                 )
                 cur.execute(
                     """
-                    INSERT INTO product_catalog (sku_code, product_name, category_id, category_big, category_small, category_path, price, raw_description)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO product_catalog (sku_code, product_name, category_big, category_small, category_path, price, raw_description)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (sku_code) DO UPDATE SET
                         product_name = EXCLUDED.product_name,
                         category_big = EXCLUDED.category_big,
@@ -243,7 +242,7 @@ def import_products_csv(
                         raw_description = EXCLUDED.raw_description
                     RETURNING id
                     """,
-                    (row["sku_code"], row["product_name"], row["category_id"], category_big, category_small, category_path, row["price"], row["raw_description"]),
+                    (row["sku_code"], row["product_name"], category_big, category_small, category_path, row["price"], row["raw_description"]),
                 )
                 product_id = cur.fetchone()[0]
                 cur.execute(
@@ -266,11 +265,9 @@ def import_products_csv(
                         source_url=f"csv_product:{row['sku_code']}",
                         raw_content=kb_content,
                         meta_extra={
-                            "category_id": row["category_id"],
                             "category_big": category_big,
                             "category_small": category_small,
                             "category_path": category_path,
-                            "product_ids": [product_id],
                             "product_skus": [row["sku_code"]],
                             "applicable_audience": "通用",
                         },
