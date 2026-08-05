@@ -144,17 +144,45 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "product_recommendation",
-            "description": "根据用户需求推荐商品。用户请求'推荐''适合我''有什么好的''送人'时使用。"
-                           "基于商品说明书知识库做语义检索。",
+            "description": "根据用户需求推荐商品（结构化检索）。"
+                           "用户请求'推荐''适合我''有什么好的''送人'时使用。"
+                           "从商品库按名称关键词 + 类目/价格/库存条件精确过滤推荐商品，"
+                           "请从用户描述中抽取核心商品关键词（product_name，如'手机''连衣裙'）与筛选条件。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
+                    "product_name": {
                         "type": "string",
-                        "description": "推荐需求描述（如：适合200斤男士穿的显瘦外套）",
+                        "description": "商品核心关键词（1~4 个字，如：手机、连衣裙）。"
+                                       "只填商品实体词，不要包含'推荐''几款''以内''适合'等修饰语；"
+                                       "价格等条件请填入 min_price/max_price 字段",
+                    },
+                    "category_big": {
+                        "type": "string",
+                        "description": "大类过滤（如：手机数码）",
+                    },
+                    "category_small": {
+                        "type": "string",
+                        "description": "小类过滤（如：智能手机）",
+                    },
+                    "category_path": {
+                        "type": "string",
+                        "description": "类目完整路径过滤（如：手机数码/手机/智能手机）",
+                    },
+                    "min_price": {
+                        "type": "number",
+                        "description": "最低价格过滤（元）",
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": "最高价格过滤（元）",
+                    },
+                    "in_stock_only": {
+                        "type": "boolean",
+                        "description": "是否仅返回有库存商品",
                     },
                 },
-                "required": ["query"],
+                "required": ["product_name"],
             },
         },
     },
@@ -164,10 +192,10 @@ TOOLS: List[Dict[str, Any]] = [
 TOOL_NAMES: List[str] = [t["function"]["name"] for t in TOOLS]
 
 # 工具名 → 该工具是否为结构化数据库检索（走 SQL）
-SQL_TOOLS = {"get_product_inventory", "get_product_price"}
+SQL_TOOLS = {"get_product_inventory", "get_product_price", "product_recommendation"}
 
 # 工具名 → 该工具是否为 RAG 知识库检索（走向量库）
-RAG_TOOLS = {"get_knowledge_base", "product_recommendation"}
+RAG_TOOLS = {"get_knowledge_base"}
 
 # ------------------------------------------------------------
 # 工具名容错映射
