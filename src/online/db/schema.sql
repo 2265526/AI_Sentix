@@ -14,13 +14,30 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- 2. 结构化业务表（精准检索）
 -- ============================================================
 
+-- 2.0 分级类目表（大类 → 中类 → 小类 三级树）
+DROP TABLE IF EXISTS category CASCADE;
+CREATE TABLE category (
+    id          BIGSERIAL PRIMARY KEY,
+    name        VARCHAR(50)  NOT NULL,          -- 类目名称（中文）
+    parent_id   BIGINT,                         -- 父类目（NULL = 一级大类）
+    level       INT          NOT NULL,          -- 层级：1 大类 / 2 中类 / 3 小类
+    path        VARCHAR(200),                   -- 完整路径（如：服装鞋包/女装/衬衫）
+    external_id INT,                            -- 外部平台类目 ID（Shopee，可空）
+    created_at  TIMESTAMP    DEFAULT NOW(),
+    CONSTRAINT category_parent_fkey
+        FOREIGN KEY (parent_id) REFERENCES category (id) ON DELETE CASCADE
+);
+
 -- 2.1 商品基础表
 DROP TABLE IF EXISTS product_catalog CASCADE;
 CREATE TABLE product_catalog (
     id              BIGSERIAL PRIMARY KEY,
     sku_code        VARCHAR(50)  NOT NULL,
     product_name    VARCHAR(255) NOT NULL,
-    category_id     INT,
+    category_id     INT,                        -- 外部平台类目 ID（Shopee，保留）
+    category_big    VARCHAR(50),                -- 大类（中文，如：服装鞋包）
+    category_small  VARCHAR(50),                -- 小类（中文，如：衬衫）
+    category_path   VARCHAR(200),               -- 完整类目路径（如：服装鞋包/女装/衬衫）
     price           DECIMAL(15, 2),
     raw_description TEXT,
     created_at      TIMESTAMP    DEFAULT NOW()
@@ -76,6 +93,10 @@ CREATE TABLE kb_chunks (
 -- ============================================================
 -- 4. 索引策略（性能优化）
 -- ============================================================
+
+-- 类目树查询（按父类目/名称）
+CREATE INDEX idx_category_parent ON category (parent_id);
+CREATE INDEX idx_category_name ON category (name);
 
 -- 加速按 SKU 检索商品（手册：idx_product_sku，B-Tree）
 CREATE INDEX idx_product_sku ON product_catalog (sku_code);
