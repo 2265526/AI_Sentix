@@ -340,19 +340,33 @@ def import_data():
             name = translate_to_chinese(name)[:255]
             description = translate_to_chinese(description)
 
+            # ★ 自动分类：优先用 breadcrumb 路径，否则按商品名关键词
+            breadcrumb_raw = row.get('breadcrumb')
+            breadcrumb = None
+            if isinstance(breadcrumb_raw, str) and breadcrumb_raw.strip():
+                try:
+                    breadcrumb = json.loads(breadcrumb_raw)
+                except Exception:
+                    breadcrumb = None
+            from src.offline.etl.category_classifier import classify
+            category_big, category_small, category_path = classify(name, breadcrumb)
+
             # 插入商品表
             product_sql = """
                 INSERT INTO product_catalog 
-                (sku_code, product_name, category_id, price, raw_description)
-                VALUES (%s, %s, %s, %s, %s)
+                (sku_code, product_name, category_id, category_big, category_small, category_path, price, raw_description)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (sku_code) DO UPDATE SET
                     product_name = EXCLUDED.product_name,
                     category_id = EXCLUDED.category_id,
+                    category_big = EXCLUDED.category_big,
+                    category_small = EXCLUDED.category_small,
+                    category_path = EXCLUDED.category_path,
                     price = EXCLUDED.price,
                     raw_description = EXCLUDED.raw_description
                 RETURNING id
             """
-            cur.execute(product_sql, (sku, name, category_id, price, description))
+            cur.execute(product_sql, (sku, name, category_id, category_big, category_small, category_path, price, description))
             product_id = cur.fetchone()[0]
 
             # 插入库存表
