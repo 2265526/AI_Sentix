@@ -24,7 +24,7 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 
 ## ✨ 版本更新
 
-## 当前最新版本为 `V1.1.0`。
+## 当前最新版本为 `V1.2.0`。
 
 <details open>
 <summary>🏗️ V1.x.x 系列（点击展开 / 收起）</summary>
@@ -67,6 +67,17 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 - **修复「未收录」误判**：意图识别工具参数键名波动（`query` / `category` / `product_type` 等）导致检索词缺失 → router 参数别名扩展 + intent 层自动注入用户原话兜底，检索不再落空
 - **修复前端聊天流式 token 重复与换行折叠**：移除 React StrictMode 对 setState updater 的双调用、消息渲染保留换行（`white-space: pre-wrap`）
 - **管理接口增强**：CORS 支持、知识库上传后自动重建 BM25 索引、`.gitignore` 密钥防护
+
+</details>
+
+<!-- ================= V1.2.0 ================= -->
+<details>
+<summary>🏷️ V1.2.0 — 分级类目体系（点击展开）</summary>
+
+#### 🔧 更新内容
+- **新增分级类目体系**：13 大类 × 65 中类 × 227 小类三级类目，新增 `category` 表（306 个类目节点）
+- **入库自动分类**：商品导入时按中文关键词自动归类；商品知识库向量同步标注类目
+- **商品表新增类目字段**：`category_big` / `category_small` / `category_path`；`kb_chunks.meta_data` 同步类目字段
 
 </details>
 
