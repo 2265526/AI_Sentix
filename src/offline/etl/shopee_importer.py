@@ -333,7 +333,6 @@ def import_data():
             name = str(row.get('title', '未知商品'))
             price = float(row.get('final_price', 0.0)) if pd.notna(row.get('final_price')) else 0.0
             description = str(row.get('Product_Description', '')) if pd.notna(row.get('Product_Description')) else ''
-            category_id = int(row.get('category_id', 0)) if pd.notna(row.get('category_id')) else 0
             stock = int(row.get('stock', 0)) if pd.notna(row.get('stock')) else 0
 
             # ★ 关键改动：入库前把非中文的商品名与描述翻译成中文
@@ -351,14 +350,13 @@ def import_data():
             from src.offline.etl.category_classifier import classify
             category_big, category_small, category_path = classify(name, breadcrumb)
 
-            # 插入商品表
+            # 插入商品表（V1.2.5：不再写入外部平台类目 ID category_id，仅保留分级类目字段）
             product_sql = """
                 INSERT INTO product_catalog 
-                (sku_code, product_name, category_id, category_big, category_small, category_path, price, raw_description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (sku_code, product_name, category_big, category_small, category_path, price, raw_description)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (sku_code) DO UPDATE SET
                     product_name = EXCLUDED.product_name,
-                    category_id = EXCLUDED.category_id,
                     category_big = EXCLUDED.category_big,
                     category_small = EXCLUDED.category_small,
                     category_path = EXCLUDED.category_path,
@@ -366,7 +364,7 @@ def import_data():
                     raw_description = EXCLUDED.raw_description
                 RETURNING id
             """
-            cur.execute(product_sql, (sku, name, category_id, category_big, category_small, category_path, price, description))
+            cur.execute(product_sql, (sku, name, category_big, category_small, category_path, price, description))
             product_id = cur.fetchone()[0]
 
             # 插入库存表
