@@ -34,7 +34,6 @@ CREATE TABLE product_catalog (
     id              BIGSERIAL PRIMARY KEY,
     sku_code        VARCHAR(50)  NOT NULL,
     product_name    VARCHAR(255) NOT NULL,
-    category_id     INT,                        -- 外部平台类目 ID（Shopee，保留）
     category_big    VARCHAR(50),                -- 大类（中文，如：服装鞋包）
     category_small  VARCHAR(50),                -- 小类（中文，如：衬衫）
     category_path   VARCHAR(200),               -- 完整类目路径（如：服装鞋包/女装/衬衫）
@@ -101,6 +100,11 @@ CREATE INDEX idx_category_name ON category (name);
 -- 加速按 SKU 检索商品（手册：idx_product_sku，B-Tree）
 CREATE INDEX idx_product_sku ON product_catalog (sku_code);
 
+-- 加速按类目分级过滤商品（手册：idx_product_category_*，B-Tree）
+CREATE INDEX idx_product_category_big   ON product_catalog (category_big);
+CREATE INDEX idx_product_category_small ON product_catalog (category_small);
+CREATE INDEX idx_product_category_path  ON product_catalog (category_path);
+
 -- 加速商品关联库存查询（手册：idx_inventory_product，B-Tree）
 CREATE INDEX idx_inventory_product ON inventory_logistics (product_id);
 
@@ -120,7 +124,6 @@ CREATE INDEX idx_chunks_vector_hnsw ON kb_chunks
 COMMENT ON COLUMN product_catalog.id              IS '主键ID（自增）';
 COMMENT ON COLUMN product_catalog.sku_code        IS '商品SKU编码（唯一标识，如 IP15PM256）';
 COMMENT ON COLUMN product_catalog.product_name    IS '商品名称';
-COMMENT ON COLUMN product_catalog.category_id     IS '商品类目ID（关联外部类目系统）';
 COMMENT ON COLUMN product_catalog.price           IS '商品售价（单位：元，保留两位小数）';
 COMMENT ON COLUMN product_catalog.raw_description IS '原始商品描述文本（用于后续提取关键词或生成向量）';
 COMMENT ON COLUMN product_catalog.created_at      IS '记录创建时间';
