@@ -96,6 +96,8 @@ CREATE TABLE kb_chunks (
 -- 类目树查询（按父类目/名称）
 CREATE INDEX idx_category_parent ON category (parent_id);
 CREATE INDEX idx_category_name ON category (name);
+-- 加速按类目路径查询类目树（类目扩充后 643 节点）
+CREATE INDEX idx_category_path ON category (path);
 
 -- 加速按 SKU 检索商品（手册：idx_product_sku，B-Tree）
 CREATE INDEX idx_product_sku ON product_catalog (sku_code);
@@ -117,6 +119,10 @@ CREATE INDEX idx_chunks_index ON kb_chunks (chunk_index);
 -- 向量相似度搜索（手册：idx_chunks_vector_hnsw，HNSW 余弦距离，vector_cosine_ops）
 CREATE INDEX idx_chunks_vector_hnsw ON kb_chunks
     USING hnsw (chunk_vector vector_cosine_ops);
+-- 加速按类目过滤知识分块（V2.1.0：meta_data 冗余类目字段的表达式索引）
+CREATE INDEX idx_chunks_category_big ON kb_chunks ((meta_data->>'category_big'));
+CREATE INDEX idx_chunks_category_small ON kb_chunks ((meta_data->>'category_small'));
+CREATE INDEX idx_chunks_category_path ON kb_chunks ((meta_data->>'category_path'));
 
 -- ============================================================
 -- 字段注释（与手册「注释说明」列一致）
