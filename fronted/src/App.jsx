@@ -21,13 +21,10 @@ export default function App() {
   const [current, setCurrent] = useState('chat')
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ height: '100vh', overflow: 'hidden' }}>
       <Sider theme="dark" width={200}>
-        <div style={{ color: '#fff', padding: 16, fontWeight: 600, fontSize: 15 }}>
+        <div style={{ color: '#fff', padding: '12px 16px 8px', fontWeight: 600, fontSize: 15, lineHeight: 1.4 }}>
           电商AI智能客服
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
-            功能验证台（无需登录）
-          </div>
         </div>
         <Menu
           theme="dark"
@@ -35,15 +32,16 @@ export default function App() {
           selectedKeys={[current]}
           items={Object.values(PAGES).map(({ key, label, icon }) => ({ key, label, icon }))}
           onClick={({ key }) => setCurrent(key)}
+          style={{ borderInlineEnd: 'none' }}
         />
       </Sider>
-      <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0' }}>
-          <Typography.Title level={4} style={{ margin: '14px 0' }}>
+      <Layout style={{ height: '100vh' }}>
+        <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography.Title level={4} style={{ margin: 0 }}>
             {PAGES[current].label}
           </Typography.Title>
         </Header>
-        <Content style={{ padding: 16, background: '#f5f5f5' }}>
+        <Content style={{ padding: 0, background: '#f5f5f5', overflow: 'hidden' }}>
           {PAGES[current].node}
         </Content>
       </Layout>
