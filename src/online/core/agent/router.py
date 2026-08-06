@@ -151,6 +151,24 @@ def _core_keywords(text: str) -> List[str]:
     return sorted(toks, key=len, reverse=True)
 
 
+def _brand_words(text: str) -> list:
+    """从需求文本中提取非类目实体词（品牌/型号，如 iphone、小米、Mate）。
+
+    与 _core_keywords 互补：_core_keywords 优先类目词（"iphone手机"→["手机"]），
+    _brand_words 提取被类目词"掩盖"的品牌词，用于降级时组合过滤（保护品牌不丢失）。
+    """
+    if not text:
+        return []
+    toks = list(dict.fromkeys(
+        t.strip()
+        for t in jieba.cut(text)
+        if t.strip() and t not in _RECOMMEND_STOP
+        and len(t.strip()) >= 2 and not t.strip().isdigit()
+        and t.strip() not in _CATEGORY_WORDS_SET
+    ))
+    return sorted(toks, key=len, reverse=True)
+
+
 def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
     """
     执行一次工具调用，返回给 LLM 的格式化结果。
@@ -204,10 +222,16 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
 
     # ---- RAG 向量检索 ----
     if name == "get_knowledge_base":
+        query = _arg(arguments, "query") or ""
+        # 意图层类目自动映射：query 含明确类目词时，作为类目过滤传给 RAG 检索
+        # （如"手机有什么问题"→ 限定"手机"类目，避免召回手机壳等无关内容）
+        cat_words = [w for w in _core_keywords(query) if w in _CATEGORY_WORDS_SET]
+        cat_path = cat_words[0] if cat_words else None
         chunks = kb_repo.search_kb(
             conn,
-            query=_arg(arguments, "query") or "",
+            query=query,
             doc_type=_doc_type_arg(arguments),
+            category_path=f"%{cat_path}%" if cat_path else None,
         )
         return {
             "name": name,
@@ -229,36 +253,62 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
             max_price=_num_arg(arguments, "max_price"),
             in_stock_only=_bool_arg(arguments, "in_stock_only"),
         )
-        # 降级兜底：模型把整句塞进关键词导致空结果时，提取核心词重试；
-        # 类目词走类目过滤（小类精确/路径模糊），避免泛词命中无关商品（如"手机"命中"手机包"）
+        # 降级兜底：模型把整句塞进关键词导致空结果时，提取核心词重试。
+        # 关键：优先保护品牌/型号词（如 iphone），用「品牌词 + 类目词」组合过滤，
+        # 避免类目词覆盖后把品牌丢弃（"iphone手机"被偷换成泛"手机"）。
         if not rows and keyword:
-            for kw in _core_keywords(keyword):
-                if kw in _CATEGORY_WORDS_SET:
+            _mp = _num_arg(arguments, "min_price")
+            _xp = _num_arg(arguments, "max_price")
+            _st = _bool_arg(arguments, "in_stock_only")
+            cats = [w for w in _core_keywords(keyword) if w in _CATEGORY_WORDS_SET]
+            brands = _brand_words(keyword)
+
+            # 1) 品牌/型号词 + 类目过滤组合（最优先，如 iphone + 手机类目）
+            if brands:
+                for b in brands:
+                    for c in cats:
+                        rows = product_repo.search_products(
+                            conn, product_name=b, category_path=c,
+                            min_price=_mp, max_price=_xp, in_stock_only=_st,
+                        )
+                        if rows:
+                            break
+                    if rows:
+                        break
+            # 2) 类目词走类目过滤（小类精确/路径模糊）
+            if not rows:
+                for kw in cats:
                     rows = product_repo.search_products(
-                        conn,
-                        category_small=kw,
-                        min_price=_num_arg(arguments, "min_price"),
-                        max_price=_num_arg(arguments, "max_price"),
-                        in_stock_only=_bool_arg(arguments, "in_stock_only"),
+                        conn, category_small=kw,
+                        min_price=_mp, max_price=_xp, in_stock_only=_st,
                     )
                     if not rows:
                         rows = product_repo.search_products(
-                            conn,
-                            category_path=kw,
-                            min_price=_num_arg(arguments, "min_price"),
-                            max_price=_num_arg(arguments, "max_price"),
-                            in_stock_only=_bool_arg(arguments, "in_stock_only"),
+                            conn, category_path=kw,
+                            min_price=_mp, max_price=_xp, in_stock_only=_st,
                         )
-                else:
+                    if rows:
+                        break
+            # 3) 品牌/型号词单独名称匹配
+            if not rows:
+                for b in brands:
                     rows = product_repo.search_products(
-                        conn,
-                        product_name=kw,
-                        min_price=_num_arg(arguments, "min_price"),
-                        max_price=_num_arg(arguments, "max_price"),
-                        in_stock_only=_bool_arg(arguments, "in_stock_only"),
+                        conn, product_name=b,
+                        min_price=_mp, max_price=_xp, in_stock_only=_st,
                     )
-                if rows:
-                    break
+                    if rows:
+                        break
+            # 4) 其余核心词名称匹配
+            if not rows:
+                for kw in _core_keywords(keyword):
+                    if kw in _CATEGORY_WORDS_SET:
+                        continue
+                    rows = product_repo.search_products(
+                        conn, product_name=kw,
+                        min_price=_mp, max_price=_xp, in_stock_only=_st,
+                    )
+                    if rows:
+                        break
         return {
             "name": name,
             "result": product_repo.format_products(rows),
