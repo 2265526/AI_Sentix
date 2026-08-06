@@ -48,9 +48,13 @@ def search(
     retriever: HybridRetriever = engine["retriever"]
     # 按请求参数构造 Reranker（threshold / top_k 随请求生效）
     reranker: Reranker = Reranker(threshold=req.threshold, top_k=req.top_k)
-    # 1) 双路召回（每路召回 candidate_k 条作为 Rerank 候选池）
+    # 1) 双路召回（每路召回 candidate_k 条作为 Rerank 候选池；支持类目级过滤）
     candidate_k = max(req.top_k * 6, 30)  # 候选池按 top_k 放大，保证 Rerank 有足够素材
-    hits = retriever.search(req.query, candidate_k=candidate_k, doc_type=req.doc_type)
+    hits = retriever.search(
+        req.query, candidate_k=candidate_k, doc_type=req.doc_type,
+        category_big=req.category_big, category_small=req.category_small,
+        category_path=req.category_path,
+    )
     # 2) 重排序：综合得分、阈值过滤、降序取 Top-K
     top = reranker.rerank(hits, query=req.query)
     results = [
