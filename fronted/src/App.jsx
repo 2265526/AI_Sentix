@@ -43,7 +43,7 @@ export default function App() {
             {PAGES[current].label}
           </Typography.Title>
         </Header>
-        <Content style={{ padding: 24, background: '#f5f5f5' }}>
+        <Content style={{ padding: 16, background: '#f5f5f5' }}>
           {PAGES[current].node}
         </Content>
       </Layout>
