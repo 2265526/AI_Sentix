@@ -21,6 +21,15 @@ class RAGSearchRequest(BaseModel):
     doc_type: Optional[str] = Field(
         None, description="按文档类型过滤（product_manual / faq / policy），不传表示全部"
     )
+    category_big: Optional[str] = Field(
+        None, description="类目过滤：大类（如：手机数码），精确匹配 meta_data.category_big"
+    )
+    category_small: Optional[str] = Field(
+        None, description="类目过滤：小类（如：智能手机），精确匹配 meta_data.category_small"
+    )
+    category_path: Optional[str] = Field(
+        None, description="类目过滤：类目路径（如：手机数码/手机/%），LIKE 模糊匹配 meta_data.category_path"
+    )
 
 
 class RAGChunk(BaseModel):
