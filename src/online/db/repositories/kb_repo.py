@@ -17,16 +17,27 @@ def search_kb(
     top_k: int = 5,
     threshold: float = 0.4,
     doc_type: Optional[str] = None,
+    category_big: Optional[str] = None,
+    category_small: Optional[str] = None,
+    category_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     知识库混合检索（BM25 + 向量双路召回 → Rerank 阈值过滤 → Top-K）。
+
+    Args:
+        category_big / category_small / category_path: 类目级过滤
+            （meta_data 类目字段，如"手机"类目排除"手机壳"等无关内容）
 
     Returns:
         [{chunk_id, doc_id, chunk_index, chunk_text, doc_type, meta_data,
           score, vector_score, bm25_score}, ...]
     """
     retriever = HybridRetriever(conn)
-    hits = retriever.search(query, candidate_k=max(top_k * 6, 30), doc_type=doc_type)
+    hits = retriever.search(
+        query, candidate_k=max(top_k * 6, 30), doc_type=doc_type,
+        category_big=category_big, category_small=category_small,
+        category_path=category_path,
+    )
     top = Reranker(threshold=threshold, top_k=top_k).rerank(hits, query=query)
     return [
         {

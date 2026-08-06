@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2.extras
 
-_MAX_RESULTS = 5
+_MAX_RESULTS = 10
 
 
 def _like_pattern(keyword: str) -> str:
@@ -127,7 +127,8 @@ def search_products(
 
     sql = f"""
         SELECT p.id, p.sku_code, p.product_name,
-               p.category_big, p.category_small, p.category_path, p.price
+               p.category_big, p.category_small, p.category_path, p.price,
+               COUNT(*) OVER() AS total_count   -- 总匹配数（供 LLM 知悉还有更多结果）
         FROM product_catalog p
         LEFT JOIN inventory_logistics i ON i.product_id = p.id
         WHERE {' AND '.join(clauses)}
@@ -146,16 +147,22 @@ def search_products(
             "category_small": r["category_small"],
             "category_path": r["category_path"],
             "price": float(r["price"]) if r["price"] is not None else None,
+            "total_count": r["total_count"],
         }
         for r in rows
     ]
 
 
 def format_products(products: List[Dict[str, Any]]) -> str:
-    """把商品列表格式化为给 LLM 的简洁文本。"""
+    """把商品列表格式化为给 LLM 的简洁文本（含总数头行，避免 LLM 误以为只有展示的几条）。"""
     if not products:
         return "未找到匹配的商品。"
-    lines = []
+    total = products[0].get("total_count") or len(products)
+    if total > len(products):
+        header = f"共找到 {total} 件匹配的商品（以下展示前 {len(products)} 件）："
+    else:
+        header = f"共找到 {len(products)} 件商品："
+    lines = [header]
     for p in products:
         price = f"¥{p['price']:.2f}" if p["price"] is not None else "价格未公布"
         category = p.get("category_path") or (
