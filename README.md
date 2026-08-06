@@ -126,6 +126,19 @@ Al_Sentix-—电商系统AI智能客服（含语音链路）
 
 </details>
 
+<!-- ================= V2.1.0 ================= -->
+<details>
+<summary>🏷️ V2.1.0 — 检索精准度与稳定性优化（点击展开）</summary>
+
+#### 🔧 更新内容
+- **商品检索返回总数**：`search_products` 用 `COUNT(*) OVER()` 返回匹配总数，`format_products` 展示「共找到 N 件（展示前 M 件）」，避免 LLM 把分页结果误认为全部
+- **推荐 LIMIT 5→10**：单次推荐最多展示 10 件
+- **推荐降级保护品牌词**：新增 `_brand_words` 提取品牌/型号词（如 iphone），降级时按「品牌词 + 类目词」组合过滤，不再被类目词覆盖丢弃品牌
+- **RAG 类目级过滤**：Vector / BM25 / Hybrid 检索器支持 `category_big` / `category_small` / `category_path` 过滤；`/rag/search` 新增类目参数；意图层（get_knowledge_base）自动提取查询类目词过滤；faq/policy 等无类目分块不受影响
+- **类目过滤索引**：`kb_chunks` 新增 `meta_data` 类目表达式索引
+
+</details>
+
 </details>
 
 ---
