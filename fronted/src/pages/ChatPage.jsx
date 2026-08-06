@@ -107,8 +107,10 @@ export default function ChatPage() {
   }
 
   // ---------- 语音对话（录音 → /v1/chat/audio → 播放回复） ----------
+  // 麦克风状态独立：只有用户点击录音（recording）才显示"使用中"，
+  // 客服回复（LLM 处理 / 播放语音）不影响麦克风状态，可与用户录音并发
   const startRecord = async () => {
-    if (loading || recording) return
+    if (recording) return  // 仅防连点重复录音；请求进行中不拦截（麦克风与客服回复并发）
     if (!navigator.mediaDevices?.getUserMedia) {
       message.warning('当前浏览器不支持录音（需 HTTPS 或 localhost）')
       return
@@ -237,34 +239,13 @@ export default function ChatPage() {
             </div>
           ))}
           <div ref={bottomRef} />
-
-          {/* 圆形麦克风按钮：浮动在聊天框右下角，录音时变红（点击停止） */}
-          <Button
-            shape="circle"
-            size="large"
-            icon={<AudioOutlined style={{ fontSize: 22 }} />}
-            onClick={recording ? stopRecord : startRecord}
-            loading={loading}
-            danger={recording}
-            style={{
-              position: 'sticky',
-              float: 'right',
-              bottom: 0,
-              marginRight: 4,
-              width: 56,
-              height: 56,
-              boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
-              background: recording ? '#ff4d4f' : '#1677ff',
-              borderColor: recording ? '#ff4d4f' : '#1677ff',
-              color: '#fff',
-            }}
-          />
         </div>
 
         {/* 音量条 */}
         {volumeBars}
 
-        {/* 输入区：独立卡片（白底圆角，与聊天面板分离），回车即发送 */}
+        {/* 输入区：独立卡片（白底圆角，与聊天面板分离），回车即发送；
+            麦克风按钮固定在输入框右下角，大小适配输入框 */}
         <div style={{ padding: '8px 24px 16px' }}>
           <div
             style={{
@@ -272,7 +253,10 @@ export default function ChatPage() {
               border: '1px solid #e8e8e8',
               borderRadius: 12,
               boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-              padding: '8px 12px',
+              padding: '8px 10px',
+              display: 'flex',
+              alignItems: 'flex-end',
+              gap: 6,
             }}
           >
             <TextArea
@@ -283,7 +267,22 @@ export default function ChatPage() {
               onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); send() } }}
               disabled={loading}
               variant="borderless"
-              style={{ width: '100%', fontSize: 16, lineHeight: 1.6, resize: 'none', padding: 0 }}
+              style={{ flex: 1, fontSize: 16, lineHeight: 1.6, resize: 'none', padding: 0 }}
+            />
+            <Button
+              shape="circle"
+              icon={<AudioOutlined style={{ fontSize: 20 }} />}
+              onClick={recording ? stopRecord : startRecord}
+              danger={recording}
+              style={{
+                width: 44,
+                height: 44,
+                flexShrink: 0,
+                background: recording ? '#ff4d4f' : '#1677ff',
+                borderColor: recording ? '#ff4d4f' : '#1677ff',
+                color: '#fff',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+              }}
             />
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block', textAlign: 'right' }}>

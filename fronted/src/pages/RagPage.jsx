@@ -79,23 +79,26 @@ export default function RagPage() {
             <Descriptions.Item label="总数">{result.total}</Descriptions.Item>
           </Descriptions>
           {result.results.length === 0 && <Typography.Text type="secondary">没有通过阈值的结果。</Typography.Text>}
-          {result.results.map((r, i) => (
-            <Card key={r.chunk_id} size="small" style={{ marginBottom: 8 }}>
-              <Space wrap style={{ marginBottom: 6 }}>
-                <Tag color="blue">#{i + 1}</Tag>
-                <Tag>{r.doc_type || 'unknown'}</Tag>
-                <Tag color="gold">综合分 {r.score}</Tag>
-                {r.vector_score != null && <Tag color="cyan">向量 {r.vector_score}</Tag>}
-                {r.bm25_score != null && <Tag color="purple">BM25 {r.bm25_score}</Tag>}
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  chunk_id={r.chunk_id} doc_id={r.doc_id} idx={r.chunk_index}
-                </Typography.Text>
-              </Space>
-              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
-                {r.chunk_text}
-              </Typography.Paragraph>
-            </Card>
-          ))}
+          {/* 结果列表：框内滚动（不与整页滚动冲突） */}
+          <div style={{ maxHeight: 'calc(100vh - 360px)', overflowY: 'auto', paddingRight: 4 }}>
+            {result.results.map((r, i) => (
+              <Card key={r.chunk_id} size="small" style={{ marginBottom: 8 }}>
+                <Space wrap style={{ marginBottom: 6 }}>
+                  <Tag color="blue">#{i + 1}</Tag>
+                  <Tag>{r.doc_type || 'unknown'}</Tag>
+                  <Tag color="gold">综合分 {r.score}</Tag>
+                  {r.vector_score != null && <Tag color="cyan">向量 {r.vector_score}</Tag>}
+                  {r.bm25_score != null && <Tag color="purple">BM25 {r.bm25_score}</Tag>}
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    chunk_id={r.chunk_id} doc_id={r.doc_id} idx={r.chunk_index}
+                  </Typography.Text>
+                </Space>
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+                  {r.chunk_text}
+                </Typography.Paragraph>
+              </Card>
+            ))}
+          </div>
         </Card>
       )}
     </div>
