@@ -16,7 +16,8 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false)
   const [recording, setRecording] = useState(false)
   const [volume, setVolume] = useState(0) // 0~1，录音实时音量
-  const bottomRef = useRef(null)
+  const scrollRef = useRef(null)          // 消息区滚动容器
+  const nearBottomRef = useRef(true)      // 是否在底部范围（80px 内），初始视为在底部
   const mediaRecorderRef = useRef(null)
   const audioChunksRef = useRef([])
   const audioRef = useRef(null)
@@ -66,9 +67,28 @@ export default function ChatPage() {
     rafRef.current = requestAnimationFrame(tick)
   }
 
-  const scrollToBottom = () => {
-    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 60)
+  // ---------- 智能跟随滚动 ----------
+  // 在底部范围（80px 内）视为"在底部"：客服回复实时跟随下滑；
+  // 用户向上翻阅历史则保持不动，滚回底部范围后恢复跟随。
+  const BOTTOM_RANGE = 80
+
+  const handleScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_RANGE
   }
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el?.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // 消息更新（含流式 token）时：仅在底部范围才跟随滚动，否则保持用户阅读位置
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [messages])
 
   // ---------- 文本发送（回车即发，无发送按钮） ----------
   const send = async () => {
@@ -103,7 +123,6 @@ export default function ChatPage() {
       setLoading(false)
       setStreaming(false)
     }
-    scrollToBottom()
   }
 
   // ---------- 语音对话（录音 → /v1/chat/audio → 播放回复） ----------
@@ -159,7 +178,6 @@ export default function ChatPage() {
     } finally {
       setLoading(false)
     }
-    scrollToBottom()
   }
 
   useEffect(() => () => stopMeter(), [])
@@ -210,7 +228,7 @@ export default function ChatPage() {
         }}
       >
         {/* 消息区（相对定位，圆形麦克风按钮浮动右下角） */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', position: 'relative' }}>
+        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', position: 'relative' }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', color: '#999', paddingTop: '20vh' }}>
               <RobotOutlined style={{ fontSize: 44 }} />
@@ -238,7 +256,6 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
-          <div ref={bottomRef} />
         </div>
 
         {/* 音量条 */}
