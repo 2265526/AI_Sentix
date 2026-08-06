@@ -124,6 +124,9 @@ class VectorRetriever:
         query: str,
         top_k: int = VECTOR_TOP_K,
         doc_type: Optional[str] = None,
+        category_big: Optional[str] = None,
+        category_small: Optional[str] = None,
+        category_path: Optional[str] = None,
     ) -> List[ChunkHit]:
         vector = get_embedding(query)
         if vector is None:
@@ -137,13 +140,26 @@ class VectorRetriever:
             FROM kb_chunks c
             JOIN kb_documents d ON d.id = c.doc_id
             WHERE (%s::text IS NULL OR d.doc_type = %s)
-            ORDER BY c.chunk_vector <=> %s::vector
-            LIMIT %s
         """
+        params: List[Any] = [vector, doc_type, doc_type]
+
+        # 类目级过滤（meta_data 冗余类目字段；无类目字段的 chunk（如 faq/policy）保留，
+        # 有类目的按条件匹配——"手机"类目过滤排除其他类目商品，不误伤售后/政策知识）
+        if category_big:
+            sql += " AND (c.meta_data->>'category_big' IS NULL OR c.meta_data->>'category_big' = %s)"
+            params.append(category_big)
+        if category_small:
+            sql += " AND (c.meta_data->>'category_small' IS NULL OR c.meta_data->>'category_small' = %s)"
+            params.append(category_small)
+        if category_path:
+            sql += " AND (c.meta_data->>'category_path' IS NULL OR c.meta_data->>'category_path' LIKE %s)"
+            params.append(category_path)
+
+        sql += " ORDER BY c.chunk_vector <=> %s::vector LIMIT %s"
+        params += [vector, top_k]
+
         with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                sql, (vector, doc_type, doc_type, vector, top_k)
-            )
+            cur.execute(sql, params)
             rows = cur.fetchall()
 
         hits: List[ChunkHit] = []
@@ -226,6 +242,9 @@ class BM25Retriever:
         query: str,
         top_k: int = BM25_TOP_K,
         doc_type: Optional[str] = None,
+        category_big: Optional[str] = None,
+        category_small: Optional[str] = None,
+        category_path: Optional[str] = None,
     ) -> List[ChunkHit]:
         # 与 refresh() 并发时可能读到刚置 None 的缓存：重试一次构建后再读
         for _ in range(2):
@@ -245,13 +264,24 @@ class BM25Retriever:
         if not q_tokens:
             return []
 
+        def _cat_ok(meta: Dict[str, Any]) -> bool:
+            """类目过滤：无类目字段的 chunk（如 faq/policy）保留，有类目的按条件匹配。"""
+            if category_big and meta.get("category_big") and meta.get("category_big") != category_big:
+                return False
+            if category_small and meta.get("category_small") and meta.get("category_small") != category_small:
+                return False
+            if category_path and meta.get("category_path") and category_path not in meta["category_path"]:
+                return False
+            return True
+
         scores = bm25.get_scores(q_tokens)
-        # 取分数 Top-N 的候选（含 doc_type 过滤）
+        # 取分数 Top-N 的候选（含 doc_type / 类目过滤）
         ranked = sorted(
             (
                 (scores[i], i)
                 for i in range(len(corpus))
-                if doc_type is None or corpus[i]["doc_type"] == doc_type
+                if (doc_type is None or corpus[i]["doc_type"] == doc_type)
+                and _cat_ok(corpus[i]["meta_data"])
             ),
             key=lambda x: x[0],
             reverse=True,
@@ -310,14 +340,19 @@ class HybridRetriever:
         query: str,
         candidate_k: int = VECTOR_TOP_K,
         doc_type: Optional[str] = None,
+        category_big: Optional[str] = None,
+        category_small: Optional[str] = None,
+        category_path: Optional[str] = None,
     ) -> List[ChunkHit]:
         """
-        双路召回并合并。
+        双路召回并合并（支持类目级过滤）。
 
         Args:
             query: 用户查询文本
             candidate_k: 每路召回候选数（Rerank 的输入池大小）
             doc_type: 按文档类型过滤（product_manual / faq / policy / None=全部）
+            category_big / category_small / category_path:
+                类目级过滤（meta_data 类目字段，如"手机"类目排除"手机壳"等无关内容）
 
         Returns:
             合并去重后的 ChunkHit 列表（score 字段暂为 0，由 Reranker 填充）
@@ -325,8 +360,16 @@ class HybridRetriever:
         if not query or not query.strip():
             return []
 
-        vec_hits = self.vector_retriever.search(query, top_k=candidate_k, doc_type=doc_type)
-        bm25_hits = self.bm25_retriever.search(query, top_k=candidate_k, doc_type=doc_type)
+        vec_hits = self.vector_retriever.search(
+            query, top_k=candidate_k, doc_type=doc_type,
+            category_big=category_big, category_small=category_small,
+            category_path=category_path,
+        )
+        bm25_hits = self.bm25_retriever.search(
+            query, top_k=candidate_k, doc_type=doc_type,
+            category_big=category_big, category_small=category_small,
+            category_path=category_path,
+        )
 
         # 按 (doc_id, chunk_index) 合并去重，两路分数都保留
         merged: Dict[tuple, ChunkHit] = {}
