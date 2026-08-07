@@ -4,16 +4,19 @@ import {
   MessageOutlined,
   SearchOutlined,
   ToolOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons'
 import ChatPage from './pages/ChatPage.jsx'
 import RagPage from './pages/RagPage.jsx'
 import AdminPage from './pages/AdminPage.jsx'
+import MonitorPage from './pages/MonitorPage.jsx'
 
 const { Header, Sider, Content } = Layout
 
 const PAGES = {
   chat: { key: 'chat', label: '客服聊天', icon: <MessageOutlined />, node: <ChatPage /> },
   rag: { key: 'rag', label: 'RAG 检索验证', icon: <SearchOutlined />, node: <RagPage /> },
+  monitor: { key: 'monitor', label: '监控', icon: <MonitorOutlined />, node: <MonitorPage /> },
   admin: { key: 'admin', label: '管理员', icon: <ToolOutlined />, node: <AdminPage /> },
 }
 
