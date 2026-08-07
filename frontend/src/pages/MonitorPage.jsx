@@ -4,7 +4,10 @@ import {
   Button,
   Card,
   Col,
+  Descriptions,
+  Divider,
   Drawer,
+  Dropdown,
   Row,
   Select,
   Space,
@@ -13,14 +16,23 @@ import {
   Tag,
   Timeline,
   Typography,
+  message,
 } from 'antd'
-import { ReloadOutlined, SyncOutlined } from '@ant-design/icons'
-import { getMonitorRequest, getMonitorRequests, getMonitorSummary } from '../api.js'
+import { DownloadOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
+import { exportMonitorLog, getMonitorRequest, getMonitorRequests, getMonitorSummary } from '../api.js'
 
 const { Text } = Typography
 
 // 状态 → 颜色/文案
 const STATUS_COLOR = { ok: 'green', degraded: 'orange', error: 'red', skipped: 'default' }
+
+const STAGE_LABEL = {
+  memory: '记忆读取/增强',
+  intent: '意图识别',
+  tool: '工具执行',
+  save: '记忆回写',
+  reply: '二次回调',
+}
 
 export default function MonitorPage() {
   const [summary, setSummary] = useState(null)
@@ -29,6 +41,7 @@ export default function MonitorPage() {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const timerRef = useRef(null)
 
   const load = useCallback(async () => {
@@ -63,9 +76,30 @@ export default function MonitorPage() {
     }
   }, [])
 
+  const doExport = useCallback(async ({ key }) => {
+    setExporting(true)
+    try {
+      const name = await exportMonitorLog({ status, format: key })
+      message.success(`已导出 ${name}`)
+    } catch (e) {
+      message.error(`导出失败: ${e.message}`)
+    } finally {
+      setExporting(false)
+    }
+  }, [status])
+
+  const exportMenu = {
+    items: [
+      { key: 'csv', label: 'CSV（表格，Excel 可直接打开）' },
+      { key: 'json', label: 'JSON（完整结构化）' },
+      { key: 'txt', label: 'TXT（日志风格，按请求分块）' },
+    ],
+    onClick: doExport,
+  }
+
   const columns = [
     { title: '时间', dataIndex: 'ts', width: 150 },
-    { title: '问题', dataIndex: 'query', ellipsis: true, width: 260,
+    { title: '问题', dataIndex: 'query', ellipsis: true, width: 240,
       render: (v) => <Text style={{ fontSize: 12 }}>{v}</Text> },
     { title: '意图', dataIndex: 'intent_tag', width: 90,
       render: (v) => v ? <Tag>{v}</Tag> : <Text type="secondary">无</Text> },
@@ -115,6 +149,12 @@ export default function MonitorPage() {
           onClick={() => setAutoRefresh(v => !v)}>
           {autoRefresh ? '自动刷新中(5s)' : '自动刷新'}
         </Button>
+        <Dropdown menu={exportMenu} disabled={exporting}>
+          <Button icon={<DownloadOutlined />} loading={exporting}
+            disabled={!summary || summary.total === 0}>
+            导出日志
+          </Button>
+        </Dropdown>
       </Space>
 
       {summary && summary.total === 0 && (
@@ -129,29 +169,99 @@ export default function MonitorPage() {
 
       {/* 请求详情：全链路时间线 */}
       <Drawer title={detail ? `请求详情 ${detail.id}` : '请求详情'}
-        open={!!detail} onClose={() => setDetail(null)} width={520}>
+        open={!!detail} onClose={() => setDetail(null)} width={560}>
         {detail && (
           <div>
-            <Space direction="vertical" style={{ width: '100%' }} size={4}>
-              <Text strong>原始问题：</Text><Text>{detail.query}</Text>
-              {detail.enhanced_query !== detail.query && (
-                <><Text strong>增强后问题：</Text><Text type="secondary">{detail.enhanced_query}</Text></>
-              )}
-              <Text strong>会话 ID：</Text><Text type="secondary">{detail.session_id || '（无）'}</Text>
-              <Space wrap>
-                <Tag>意图：{detail.intent_tag || '无'}</Tag>
-                <Tag>工具：{detail.tool || '无'}</Tag>
-                <Tag>命中：{detail.hits}</Tag>
-                {detail.degraded && <Tag color="orange">降级</Tag>}
-                {detail.fallback && <Tag color="purple">决策兜底</Tag>}
-                {detail.context_reset && <Tag color="blue">会话过期</Tag>}
-                <Tag color={detail.llm_ok ? 'green' : 'red'}>
-                  LLM {detail.llm_ok ? 'OK' : '失败'}
-                </Tag>
-                <Tag>总耗时 {detail.total_ms}ms</Tag>
-              </Space>
+            {/* 基本信息 */}
+            <Descriptions column={1} size="small" bordered
+              labelStyle={{ width: 110, fontWeight: 600 }}>
+              <Descriptions.Item label="时间">{detail.ts}</Descriptions.Item>
+              <Descriptions.Item label="会话 ID">{detail.session_id || '（无）'}</Descriptions.Item>
+              <Descriptions.Item label="原始问题">{detail.query}</Descriptions.Item>
+              <Descriptions.Item label="增强后问题">
+                {detail.enhanced_query ? (
+                  detail.enhanced_query === detail.query
+                    ? <Text type="secondary">（与原始问题一致）</Text>
+                    : detail.enhanced_query
+                ) : '（无）'}
+              </Descriptions.Item>
+              <Descriptions.Item label="预分类意图">
+                <Tag>{detail.intent_tag || '无'}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="意图工具">
+                {detail.intent_tool ? <Tag>{detail.intent_tool}</Tag> : <Text type="secondary">无（模型未选中工具）</Text>}
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>意图识别阶段模型选中的工具（可能未实际执行）</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="实际工具">
+                {(detail.tool || (detail.tools_used || []).length > 0)
+                  ? <Tag color="blue">{detail.tool || detail.tools_used.join(', ')}</Tag>
+                  : <Text type="secondary">无（未执行工具）</Text>}
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                  {detail.tools_used?.length > 0
+                    ? `实际执行：${detail.tools_used.join(', ')}${detail.fallback ? '（决策兜底触发）' : ''}`
+                    : '决策兜底/容错后真正执行的工具'}
+                </div>
+              </Descriptions.Item>
+            </Descriptions>
+
+            {/* 状态标记 */}
+            <Space wrap style={{ marginTop: 12 }}>
+              <Tag>命中：{detail.hits}</Tag>
+              {detail.degraded && <Tag color="orange">降级命中</Tag>}
+              {detail.fallback && <Tag color="purple">决策兜底</Tag>}
+              {detail.context_reset && <Tag color="blue">会话过期</Tag>}
+              <Tag color={detail.llm_ok ? 'green' : 'red'}>
+                LLM {detail.llm_ok ? 'OK' : '失败'}
+              </Tag>
+              <Tag>总耗时 {detail.total_ms}ms</Tag>
             </Space>
 
+            {/* 工具调用参数 */}
+            {detail.tool_inputs?.length > 0 && (
+              <>
+                <Typography.Title level={5} style={{ marginTop: 20 }}>
+                  工具调用参数
+                </Typography.Title>
+                {detail.tool_inputs.map((t, i) => (
+                  <Card key={i} size="small" style={{ marginBottom: 8 }}
+                    title={<Tag color="blue">{t.name}</Tag>}>
+                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {JSON.stringify(t.arguments ?? {}, null, 2)}
+                    </pre>
+                  </Card>
+                ))}
+              </>
+            )}
+
+            {/* 工具返回摘要 */}
+            {detail.tool_results_summary?.length > 0 && (
+              <>
+                <Typography.Title level={5} style={{ marginTop: 20 }}>
+                  工具返回摘要
+                </Typography.Title>
+                {detail.tool_results_summary.map((t, i) => (
+                  <div key={i} style={{ marginBottom: 8 }}>
+                    <Tag color="blue">{t.name}</Tag> 命中 <Text strong>{t.hits}</Text> 条
+                    {t.preview && (
+                      <div style={{ fontSize: 12, color: '#555', marginTop: 2,
+                        background: '#fafafa', padding: '6px 8px', borderRadius: 4 }}>
+                        {t.preview}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 最终回复 */}
+            <Typography.Title level={5} style={{ marginTop: 20 }}>
+              最终回复{!detail.llm_ok && <Tag color="red" style={{ marginLeft: 8 }}>兜底话术</Tag>}
+            </Typography.Title>
+            <div style={{ background: '#fafafa', padding: '8px 12px', borderRadius: 4 }}>
+              <Text>{detail.reply || '（无回复）'}</Text>
+            </div>
+
+            {/* 全链路时间线 */}
             <Typography.Title level={5} style={{ marginTop: 20 }}>
               全链路时间线
             </Typography.Title>
@@ -161,7 +271,7 @@ export default function MonitorPage() {
                 children: (
                   <div>
                     <Space>
-                      <Text strong>{s.stage}</Text>
+                      <Text strong>{STAGE_LABEL[s.stage] || s.stage}</Text>
                       <Tag color={STATUS_COLOR[s.status]}>{s.status}</Tag>
                       <Text type="secondary">{s.ms}ms</Text>
                     </Space>
@@ -169,10 +279,23 @@ export default function MonitorPage() {
                     {s.extra?.error && (
                       <div style={{ fontSize: 12, color: '#cf1322', marginTop: 2 }}>{s.extra.error}</div>
                     )}
+                    {s.extra?.raw && (
+                      <div style={{ fontSize: 12, color: '#888', marginTop: 2, wordBreak: 'break-all' }}>
+                        LLM 响应: {s.extra.raw}
+                      </div>
+                    )}
+                    {s.extra?.hits !== undefined && (
+                      <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>召回 {s.extra.hits} 条</div>
+                    )}
                   </div>
                 ),
               }))}
             />
+
+            <Divider />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              数据源：内存环形缓冲（最近 200 条，服务重启后清空）。需要留档可在列表页工具栏「导出日志」下载 CSV/JSON/TXT。
+            </Text>
           </div>
         )}
       </Drawer>
