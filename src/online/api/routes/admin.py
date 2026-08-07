@@ -10,16 +10,21 @@ api/routes/admin.py —— 管理员接口（前端管理页使用，无需登�
      - pandas 解析 CSV → product_catalog / inventory_logistics 增量入库（ON CONFLICT 更新）
      - 说明：本接口做结构化数据同步；若需按商品说明书生成知识库向量，
        仍使用离线脚本 src/offline/etl/shopee_importer.py
+3. 类目管理（V2.2.3）
+     - GET  /admin/categories          类目树（大类/中类/小类 三级）
+     - GET  /admin/categories/search   类目搜索（名称/路径模糊匹配）
+     - POST /admin/categories          新增类目（层级 + 父级校验，自动拼 path）
 """
 import hashlib
 import io
 import json
 import logging
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from psycopg2.extensions import connection
+from pydantic import BaseModel, Field
 
 from src.common.constants import ALLOWED_DOC_TYPES
 from src.online.db.session import get_db
@@ -38,6 +43,148 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 ALLOWED_TEXT_EXT = (".txt", ".md")
 ALLOWED_PDF_EXT = (".pdf")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
+
+
+# ============================================================
+# 类目管理（category 表，三级树）
+# ============================================================
+class CategoryCreate(BaseModel):
+    """新增类目请求体。level: 1=大类 2=中类 3=小类。"""
+
+    name: str = Field(..., min_length=1, max_length=50, description="类目名称")
+    level: int = Field(..., ge=1, le=3, description="层级：1 大类 / 2 中类 / 3 小类")
+    parent_id: Optional[int] = Field(None, description="父类目 id（大类不填；中类填大类；小类填中类）")
+
+
+def _category_rows(cur) -> List[tuple]:
+    """读取全部类目（扁平行）。"""
+    cur.execute(
+        "SELECT id, name, parent_id, level, path FROM category ORDER BY level, id"
+    )
+    return cur.fetchall()
+
+
+def _build_tree(rows: List[tuple]) -> list:
+    """扁平行 → 嵌套树（level 1 → 2 → 3）。"""
+    nodes = {
+        r[0]: {"id": r[0], "name": r[1], "parent_id": r[2], "level": r[3], "path": r[4], "children": []}
+        for r in rows
+    }
+    roots = []
+    for r in rows:
+        node = nodes[r[0]]
+        if r[2] is None:
+            roots.append(node)
+        elif r[2] in nodes:
+            nodes[r[2]]["children"].append(node)
+    return roots
+
+
+def _validate_category(cur, name: str, level: int, parent_id: Optional[int]) -> str:
+    """
+    校验新增类目并计算完整路径 path。
+
+    Raises:
+        ValueError: 层级/父级不匹配、父类目不存在、同级重名。
+    """
+    name = name.strip()
+    if not name:
+        raise ValueError("类目名称不能为空")
+    if len(name) > 50:
+        raise ValueError("类目名称最长 50 字")
+
+    if level == 1:
+        if parent_id is not None:
+            raise ValueError("大类不能指定父类目")
+        return name
+
+    if parent_id is None:
+        raise ValueError("中类/小类必须指定父类目")
+    cur.execute("SELECT name, level, path FROM category WHERE id = %s", (parent_id,))
+    parent = cur.fetchone()
+    if parent is None:
+        raise ValueError("父类目不存在")
+    if level == 2 and parent[1] != 1:
+        raise ValueError("中类的父级必须是大类（level=1）")
+    if level == 3 and parent[1] != 2:
+        raise ValueError("小类的父级必须是中类（level=2）")
+
+    # 同级下名称唯一（IS NOT DISTINCT FROM 兼容 parent_id 为 NULL）
+    cur.execute(
+        "SELECT 1 FROM category WHERE name = %s AND parent_id IS NOT DISTINCT FROM %s",
+        (name, parent_id),
+    )
+    if cur.fetchone():
+        raise ValueError(f"类目「{name}」在所选父级下已存在")
+
+    return f"{parent[2]}/{name}"
+
+
+@router.get("/categories", summary="类目树（大类/中类/小类三级）")
+def list_categories(conn: connection = Depends(get_db)):
+    """返回完整类目树（含层级与完整路径），供前端树展示与级联下拉。"""
+    cur = conn.cursor()
+    try:
+        rows = _category_rows(cur)
+    finally:
+        cur.close()
+    return {"total": len(rows), "tree": _build_tree(rows)}
+
+
+@router.get("/categories/search", summary="类目搜索（名称/路径模糊匹配）")
+def search_categories(
+    q: str = Query(..., min_length=1, max_length=50, description="搜索关键词（支持相似/包含匹配）"),
+    conn: connection = Depends(get_db),
+):
+    """按类目名称或完整路径模糊搜索（ILIKE），返回命中的类目及其层级/路径。"""
+    pattern = f"%{q}%"
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, name, parent_id, level, path
+            FROM category
+            WHERE name ILIKE %s OR path ILIKE %s
+            ORDER BY level, id
+            LIMIT 200
+            """,
+            (pattern, pattern),
+        )
+        items = [
+            {"id": r[0], "name": r[1], "parent_id": r[2], "level": r[3], "path": r[4]}
+            for r in cur.fetchall()
+        ]
+    finally:
+        cur.close()
+    return {"query": q, "total": len(items), "items": items}
+
+
+@router.post("/categories", summary="新增类目（大类/中类/小类）")
+def create_category(
+    body: CategoryCreate,
+    conn: connection = Depends(get_db),
+):
+    """新增类目：中类必须选所属大类，小类必须选所属中类；自动拼接完整 path。"""
+    cur = conn.cursor()
+    try:
+        path = _validate_category(cur, body.name, body.level, body.parent_id)
+        cur.execute(
+            "INSERT INTO category (name, parent_id, level, path) VALUES (%s, %s, %s, %s) RETURNING id, created_at",
+            (body.name.strip(), body.parent_id, body.level, path),
+        )
+        new_id, created_at = cur.fetchone()
+        conn.commit()
+    except ValueError as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+    logger.info("admin/categories: create id=%s name=%s level=%s path=%s", new_id, body.name, body.level, path)
+    return {"status": "ok", "id": new_id, "name": body.name.strip(), "level": body.level, "path": path, "created_at": created_at}
 
 
 # ============================================================
