@@ -18,22 +18,15 @@ services/chat_service.py —— 文本对话服务编排
 import logging
 from typing import Any, Dict, Iterator, List, Optional
 
+from src.online.core.agent.enricher import enrich_query
 from src.online.core.agent.intent import detect_intent
 from src.online.core.agent.router import execute_tool_calls
 from src.online.core.llm.client import LLMClient
+from src.online.core.llm.prompt_templates import CUSTOMER_SERVICE_PROMPT, FALLBACK_REPLY
+from src.online.core.memory import extractor
+from src.online.db.repositories import memory_repo
 
 logger = logging.getLogger(__name__)
-
-# 客服回答系统提示词（与工具返回的参考信息配合）
-CUSTOMER_SERVICE_PROMPT = """你是一名专业的电商AI智能客服，负责解答用户在商品、库存、物流、售后、使用说明等方面的问题。
-回答规则：
-1. 若提供了【工具返回】的参考信息，严格依据参考信息回答；价格、库存、物流时效等数值必须与参考信息一致，不得编造；
-2. 参考信息未覆盖的部分，如实说明"该信息暂未收录"，不要猜测；
-3. 用户只是寒暄、闲聊时，直接友好回应即可，无需工具信息；
-4. 回答使用简体中文，简洁、专业、友好。"""
-
-# 二次模型回调失败时的兜底话术
-FALLBACK_REPLY = "抱歉，我这边暂时遇到了点问题，请稍后再试。"
 
 
 class ChatService:
@@ -41,6 +34,91 @@ class ChatService:
 
     def __init__(self, llm: Optional[LLMClient] = None):
         self.llm = llm or LLMClient()
+
+    # --------------------------------------------------------
+    # 内部：记忆读取与问题增强（①读 session_context ②enrich_query）
+    # --------------------------------------------------------
+    def _load_memory(
+        self, conn, session_id: str, query: str, history: Optional[List[Dict[str, str]]]
+    ) -> Dict[str, Any]:
+        """
+        读取会话上下文并做问题增强。
+
+        Returns:
+            {"enhanced_query", "context_reset": bool, "original"}
+            会话过期/首次请求/切换意图清空时 context_reset=True；
+            记忆相关异常一律兜底：返回原问题直通（绝不阻断主链路）。
+        """
+        ctx: Dict[str, Any] = {}
+        context_reset = False
+        try:
+            record = memory_repo.get_session_context(conn, session_id)
+            if record is None:
+                # 请求带了 session_id 但无活跃上下文（TTL 过期/被清理/首次请求）
+                context_reset = True
+            else:
+                ctx = record["context"] or {}
+
+            result = enrich_query(query, ctx, history)
+            if result.switch_intent:
+                # 用户明确切换话题：清空服务端上下文，并向前端发过期信号
+                try:
+                    memory_repo.clear_session_context(conn, session_id)
+                except Exception as e:
+                    logger.warning("chat: 清空会话上下文失败: %s", e)
+                context_reset = True
+            return {
+                "enhanced_query": result.query,
+                "context_reset": context_reset,
+                "original": result.original,
+            }
+        except Exception as e:
+            logger.warning("chat: 记忆读取/问题增强失败，原问题直通: %s", e)
+            try:
+                conn.rollback()  # 恢复事务，避免影响后续工具 SQL
+            except Exception:
+                pass
+            return {"enhanced_query": query, "context_reset": False, "original": query}
+
+    # --------------------------------------------------------
+    # 内部：记忆回写（⑤实体抽取回写 + 交互日志）
+    # --------------------------------------------------------
+    def _save_memory(
+        self,
+        conn,
+        session_id: str,
+        query: str,
+        enhanced_query: str,
+        intent,
+        tool_results: List[Dict[str, Any]],
+        tool_failed: bool,
+    ) -> None:
+        """回写会话上下文与交互日志；任何异常仅记日志，不阻断主链路。"""
+        try:
+            if tool_failed or not tool_results:
+                # 工具执行失败/无结果：不更新实体，仅轮次+1、刷新 TTL（保留旧快照）
+                old = memory_repo.get_session_context(conn, session_id)
+                memory_repo.upsert_session_context(conn, session_id, old["context"] if old else {})
+            else:
+                extractor.update_session_context(conn, session_id, query, intent, tool_results)
+            # 交互流水（P1：画像原料）
+            entities = extractor.extract_entities(query, intent, tool_results)
+            memory_repo.log_interaction(
+                conn,
+                user_id=None,
+                session_id=session_id,
+                query=query,
+                enhanced_query=enhanced_query,
+                tool_called=intent.first_tool_name if intent.has_tool_call else None,
+                result_count=len(tool_results),
+                entities=entities,
+            )
+        except Exception as e:
+            logger.warning("chat: 记忆回写失败: %s", e)
+            try:
+                conn.rollback()  # 恢复事务，避免影响请求内后续 SQL
+            except Exception:
+                pass
 
     # --------------------------------------------------------
     # 内部：组装二次回调消息
@@ -66,22 +144,42 @@ class ChatService:
         conn,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """完整对话一轮，返回 {reply, intent, tools_used}。"""
-        # 1) 意图识别
-        intent = detect_intent(self.llm, query, history)
+        """完整对话一轮，返回 {reply, intent, tools_used, context_reset, original_query, enriched_query}。"""
+        # ①② 记忆读取 + 问题增强（session_id 为空则跳过，行为与旧版一致）
+        enhanced_query = query
+        context_reset = False
+        original_query = query
+        if session_id:
+            memory = self._load_memory(conn, session_id, query, history)
+            enhanced_query = memory["enhanced_query"]
+            context_reset = memory["context_reset"]
+            original_query = memory["original"]
 
-        # 2) 执行工具（意图识别出错则跳过工具）
+        # ③④ 意图识别 + 工具执行
+        intent = detect_intent(self.llm, enhanced_query, history)
+
         tool_results: List[Dict[str, Any]] = []
+        tool_failed = False
         if intent.has_tool_call:
             try:
                 tool_results = execute_tool_calls(conn, intent.tool_calls)
             except Exception as e:  # 工具执行异常不阻断回答
+                tool_failed = True
                 logger.warning("chat: 工具执行失败 %s: %s", intent.tool_calls, e)
+                try:
+                    conn.rollback()  # 工具 SQL 失败后恢复事务，保证记忆写入/后续可用
+                except Exception:
+                    pass
 
-        # 3) 二次模型回调（非流式）
+        # ⑤ 记忆回写
+        if session_id:
+            self._save_memory(conn, session_id, query, enhanced_query, intent, tool_results, tool_failed)
+
+        # ⑥⑦ 二次模型回调（非流式，传增强后问题）
         try:
-            messages = self._build_reply_messages(query, history, tool_results)
+            messages = self._build_reply_messages(enhanced_query, history, tool_results)
             reply = self.llm.chat(messages)
         except Exception as e:  # LLM/网络异常统一兜底，保证接口不 500
             logger.error("chat: 二次回调失败: %s", e)
@@ -91,6 +189,9 @@ class ChatService:
             "reply": reply,
             "intent": intent.first_tool_name,
             "tools_used": [tr["name"] for tr in tool_results],
+            "context_reset": context_reset,
+            "original_query": original_query,
+            "enriched_query": enhanced_query,
         }
 
     # --------------------------------------------------------
@@ -101,29 +202,56 @@ class ChatService:
         conn,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         流式对话，yield 结构化事件：
-            {"type": "meta", "intent": ..., "tools_used": [...]}
+            {"type": "meta", "intent": ..., "tools_used": [...],
+             "original": ..., "enriched": ..., "context_reset": bool}
             {"type": "token", "content": "..."}
             {"type": "done"}
         """
-        intent = detect_intent(self.llm, query, history)
+        # ①② 记忆读取 + 问题增强
+        enhanced_query = query
+        context_reset = False
+        original_query = query
+        if session_id:
+            memory = self._load_memory(conn, session_id, query, history)
+            enhanced_query = memory["enhanced_query"]
+            context_reset = memory["context_reset"]
+            original_query = memory["original"]
+
+        # ③④ 意图识别 + 工具执行
+        intent = detect_intent(self.llm, enhanced_query, history)
 
         tool_results: List[Dict[str, Any]] = []
+        tool_failed = False
         if intent.has_tool_call:
             try:
                 tool_results = execute_tool_calls(conn, intent.tool_calls)
             except Exception as e:
+                tool_failed = True
                 logger.warning("chat_stream: 工具执行失败 %s: %s", intent.tool_calls, e)
+                try:
+                    conn.rollback()  # 恢复事务，保证记忆写入/后续可用
+                except Exception:
+                    pass
 
         yield {
             "type": "meta",
             "intent": intent.first_tool_name,
             "tools_used": [tr["name"] for tr in tool_results],
+            "original": original_query,
+            "enriched": enhanced_query,
+            "context_reset": context_reset,
         }
 
-        messages = self._build_reply_messages(query, history, tool_results)
+        # ⑤ 记忆回写
+        if session_id:
+            self._save_memory(conn, session_id, query, enhanced_query, intent, tool_results, tool_failed)
+
+        # ⑥⑦ 二次模型回调（流式，传增强后问题）
+        messages = self._build_reply_messages(enhanced_query, history, tool_results)
         try:
             for delta in self.llm.chat_stream(messages):
                 if delta:
