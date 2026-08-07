@@ -161,6 +161,19 @@ def _structured_search(conn, tool_name: str, norm: Dict[str, Any]) -> tuple:
         if rows:
             return rows, 1
 
+    # L0.5：纯类目词优先走类目检索（P1-6）。
+    # '手机'/'衬衫'/'连衣裙' 等泛化品类词直接 ILIKE 名称会被配件/周边淹没
+    # （实测名称含'手机' 674 件几乎全是手机包/钱包，真正手机名不含'手机'），
+    # 类目检索能精确落到该品类本体（'手机'→ 手机数码/手机 中类，排除手机配件）。
+    if name and name in _CATEGORY_WORDS_SET:
+        level_key, level_val = _CATEGORY_LEVEL[name]
+        if level_key == "category_path":
+            # 段边界：'手机数码/手机/' 不匹配 '手机数码/手机配件/...'（同级前缀混淆）
+            level_val = f"{level_val}/"
+        rows = _call(product_name=None, **{level_key: level_val})
+        if rows:
+            return rows, 3
+
     # L1：归一化名称 + 全部过滤条件
     if name:
         rows = _call(product_name=name)
@@ -230,8 +243,9 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         else:
             result = product_repo.format_products(rows)
         if rows and level >= 2:
-            # 降级命中（品牌/类目/型号近似）：明确标注，避免 LLM 误报为精确匹配
-            result = "⚠️ 未找到完全匹配的商品，以下为相关商品（近似匹配）：\n" + result
+            # 降级命中（品牌/类目/型号近似）：积极引导 LLM 展示相关商品，
+            # 避免"未找到完全匹配"等措辞让 LLM 误答"没查到"
+            result = "为您找到以下相关商品（可能包含同系列/同品牌商品，按相关度排序）：\n" + result
         return {"name": name, "result": result, "raw": rows}
 
     # ---- RAG 向量检索 ----
