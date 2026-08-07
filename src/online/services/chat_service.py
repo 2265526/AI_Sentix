@@ -29,7 +29,7 @@ from src.online.core.agent.router import execute_tool_calls
 from src.online.core.llm.client import LLMClient
 from src.online.core.llm.prompt_templates import CUSTOMER_SERVICE_PROMPT, FALLBACK_REPLY
 from src.online.core.memory import extractor
-from src.online.core.monitor import MonitorRequest, MonitorStep, monitor_store
+from src.online.core.monitor.monitor import MonitorRequest, MonitorStep, monitor_store
 from src.online.db.repositories import memory_repo
 
 logger = logging.getLogger(__name__)
@@ -39,14 +39,41 @@ def _ms(t0: float) -> int:
     """耗时（毫秒）。"""
     return int(round((time.time() - t0) * 1000))
 
-# SKU 模式（如 G054000 / IP15PM256）
-_SKU_RE = re.compile(r"^[A-Za-z]{1,4}\d{3,}$|^\d{6,}$")
+
+def _summarize_tool_results(tool_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """生成工具返回摘要（name / 命中条数 / 返回文本预览），供监控详情与导出。
+
+    raw 为结构化行（列表）时记命中条数；result 为给 LLM 的格式化文本，
+    预览截断 300 字符，避免环形缓冲被大返回撑爆。
+    """
+    out: List[Dict[str, Any]] = []
+    for tr in tool_results or []:
+        raw = tr.get("raw")
+        hits = len(raw) if isinstance(raw, list) else 0
+        result = str(tr.get("result") or "")
+        out.append({
+            "name": tr.get("name"),
+            "hits": hits,
+            "preview": result[:300],
+        })
+    return out
+
+# SKU 模式（如 G000115 / 21873056212；子串匹配：'G000115 多少钱' 中也能提取）
+_SKU_RE = re.compile(r"[A-Za-z]{1,4}\d{3,}|\d{6,}")
 
 # 预分类标签 → 兜底工具（模型未调用工具时的决策兜底）
 _FALLBACK_TOOL = {
     "INVENTORY": "get_product_inventory",
     "PRICE": "get_product_price",
     "RECOMMEND": "product_recommendation",
+}
+
+# 预分类标签 → 直驱工具（P1-5：预分类命中直接执行，不依赖 LLM function calling 选工具）
+_INTENT_TOOL = {
+    "FAQ": "get_knowledge_base",
+    "RECOMMEND": "product_recommendation",
+    "PRICE": "get_product_price",
+    "INVENTORY": "get_product_inventory",
 }
 
 
@@ -66,17 +93,63 @@ def _has_product_signal(query: str) -> bool:
 
 def _fallback_tool_call(intent_tag: Optional[str], query: str) -> Optional[Dict[str, Any]]:
     """
-    决策兜底：模型未调用工具时，依据预分类标签 / 商品词信号强制走一次结构化检索。
+    决策兜底：模型未调用工具时，依据预分类标签 / SKU / 商品词信号强制走一次结构化检索。
+
+    P0-2：FAQ 语义强制走一次知识库检索（与商品兜底对称，避免 LLM 未调用
+          get_knowledge_base 时零检索瞎答"未收录"）；RAG 为语义检索，query 用原句不清洗。
+    P0-3：query 含 SKU 码（如 G000115）时直接按 sku_code 精确匹配，绕过名称模糊。
+    P0-4：product_name 先经 clean_product_name 预清洗（去掉'库存/价格/多少'等
+          意图词），保证 L1 名称模糊匹配能命中精确商品。
     返回兜底 tool_call 或 None（纯寒暄/FAQ 语义不兜底商品检索）。
     """
     if intent_tag == "FAQ":
-        return None  # 售后/使用说明语义走知识库，不强制商品检索
+        # 售后/使用说明语义走知识库（RAG 语义检索，原句效果最好）
+        return {"name": "get_knowledge_base", "arguments": {"query": query}}
+    sku = _SKU_RE.search(query or "")
+    if sku:
+        # 用户直接报 SKU 码（G000115 / IP15PM256）：走 L0 精确匹配
+        tool = _FALLBACK_TOOL.get(intent_tag, "get_product_price")
+        return {"name": tool, "arguments": {"sku_code": sku.group(0)}}
     if intent_tag in _FALLBACK_TOOL:
-        return {"name": _FALLBACK_TOOL[intent_tag], "arguments": {"product_name": query}}
+        clean = params.clean_product_name(query) or query
+        return {"name": _FALLBACK_TOOL[intent_tag], "arguments": {"product_name": clean}}
     if _has_product_signal(query):
         # 预分类未命中但含商品词（如'休闲，宽松的衬衫'）→ 按导购语义走推荐检索
-        return {"name": "product_recommendation", "arguments": {"product_name": query}}
+        clean = params.clean_product_name(query) or query
+        return {"name": "product_recommendation", "arguments": {"product_name": clean}}
     return None
+
+
+def _resolve_tool_calls(intent, query: str) -> List[Dict[str, Any]]:
+    """
+    P1-5 预分类直驱：预分类命中（实测规则分类器 4/4 稳定）时，工具已确定，
+    直接构造对应工具调用——不再依赖 LLM function calling 做路由选择；
+    LLM 若返回了 arguments（如品牌/型号/价格）则优先采用，缺失键用兜底默认值补全。
+    预分类未命中：沿用 LLM tool_calls；为空再走 _fallback_tool_call。
+    """
+    if intent.intent in _INTENT_TOOL:
+        name = _INTENT_TOOL[intent.intent]
+        args: Dict[str, Any] = {}
+        if intent.tool_calls:
+            args = dict(intent.tool_calls[0].get("arguments") or {})
+        if name == "get_knowledge_base":
+            # RAG 语义检索：原句作为 query 效果最好
+            args.setdefault("query", query)
+        else:
+            sku = _SKU_RE.search(query or "")
+            if sku:
+                # SKU 精确优先（用户报码直接命中）
+                args.setdefault("sku_code", sku.group(0))
+            elif not args.get("product_name"):
+                args["product_name"] = params.clean_product_name(query) or query
+        return [{"name": name, "arguments": args}]
+    # 预分类未命中：LLM 调用优先，空则决策兜底
+    calls = list(intent.tool_calls)
+    if not calls:
+        fallback = _fallback_tool_call(intent.intent, query)
+        if fallback:
+            return [fallback]
+    return calls
 
 
 @dataclass
@@ -246,22 +319,25 @@ class ChatService:
         intent = detect_intent(self.llm, state.enhanced_query, history)
         state.intent_tag = intent.intent
         state.intent_tool = intent.first_tool_name
+        intent_extra: Dict[str, Any] = {}
+        if intent.error:
+            intent_extra["error"] = intent.error
+        if intent.raw_response:
+            intent_extra["raw"] = intent.raw_response[:200]
         steps.append(MonitorStep(
             stage="intent",
             status="error" if intent.error else "ok",
             detail=f"预分类={state.intent_tag or '无'} 工具={state.intent_tool or '无'}",
             ms=_ms(t0),
-            extra={"error": intent.error} if intent.error else {},
+            extra=intent_extra,
         ))
 
-        # ④ 工具调用：模型未调用但商品词信号明确时，决策兜底强制检索一次
-        calls = list(intent.tool_calls)
-        if not calls:
-            fallback = _fallback_tool_call(intent.intent, state.enhanced_query or query)
-            if fallback:
-                fallback_used = True
-                logger.info("chat: 模型未调用工具，决策兜底 %s（query=%r）", fallback["name"], query)
-                calls = [fallback]
+        # ④ 工具调用：预分类直驱 → LLM tool_calls → 决策兜底（P1-5 不依赖 LLM 选工具）
+        calls = _resolve_tool_calls(intent, state.enhanced_query or query)
+        if not intent.has_tool_call:
+            fallback_used = True
+            if calls:
+                logger.info("chat: 模型未调用工具，按预分类/兜底执行 %s（query=%r）", calls[0].get("name"), query)
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
@@ -315,15 +391,19 @@ class ChatService:
                                  detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
                                  ms=_ms(t0)))
 
-        # 监控记录（V2.2.2：请求级时间线，供「监控」页面排查）
+        # 监控记录（V2.2.2：请求级时间线；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
             ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             session_id=session_id or "",
             query=state.user_query,
             enhanced_query=state.enhanced_query,
             intent_tag=state.intent_tag,
-            tool=state.intent_tool,
+            intent_tool=state.intent_tool,
+            tool=state.tools_used[0] if state.tools_used else state.intent_tool,
             tools_used=state.tools_used,
+            tool_inputs=[{"name": c.get("name"), "arguments": c.get("arguments")} for c in calls],
+            tool_results_summary=_summarize_tool_results(tool_results),
+            reply=reply[:2000],
             hits=state.retrieval_hits,
             degraded=state.degraded,
             fallback=fallback_used,
@@ -393,22 +473,25 @@ class ChatService:
         intent = detect_intent(self.llm, state.enhanced_query, history)
         state.intent_tag = intent.intent
         state.intent_tool = intent.first_tool_name
+        intent_extra: Dict[str, Any] = {}
+        if intent.error:
+            intent_extra["error"] = intent.error
+        if intent.raw_response:
+            intent_extra["raw"] = intent.raw_response[:200]
         steps.append(MonitorStep(
             stage="intent",
             status="error" if intent.error else "ok",
             detail=f"预分类={state.intent_tag or '无'} 工具={state.intent_tool or '无'}",
             ms=_ms(t0),
-            extra={"error": intent.error} if intent.error else {},
+            extra=intent_extra,
         ))
 
-        # ④ 工具调用：模型未调用但商品词信号明确时，决策兜底强制检索一次
-        calls = list(intent.tool_calls)
-        if not calls:
-            fallback = _fallback_tool_call(intent.intent, state.enhanced_query or query)
-            if fallback:
-                fallback_used = True
-                logger.info("chat_stream: 模型未调用工具，决策兜底 %s（query=%r）", fallback["name"], query)
-                calls = [fallback]
+        # ④ 工具调用：预分类直驱 → LLM tool_calls → 决策兜底（P1-5 不依赖 LLM 选工具）
+        calls = _resolve_tool_calls(intent, state.enhanced_query or query)
+        if not intent.has_tool_call:
+            fallback_used = True
+            if calls:
+                logger.info("chat_stream: 模型未调用工具，按预分类/兜底执行 %s（query=%r）", calls[0].get("name"), query)
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
@@ -461,27 +544,35 @@ class ChatService:
         # ⑥⑦ 二次模型回调（流式，传增强后问题）
         messages = self._build_reply_messages(state.enhanced_query, history, tool_results)
         t0 = time.time()
+        reply_parts: List[str] = []
         try:
             for delta in self.llm.chat_stream(messages):
                 if delta:
+                    reply_parts.append(delta)
                     yield {"type": "token", "content": delta}
         except Exception as e:  # LLM/网络异常统一兜底，保证 SSE 流不中断
             logger.error("chat_stream: 二次回调失败: %s", e)
             llm_ok = False
+            reply_parts.append(FALLBACK_REPLY)
             yield {"type": "token", "content": FALLBACK_REPLY}
+        reply = "".join(reply_parts)
         steps.append(MonitorStep(stage="reply", status="ok" if llm_ok else "error",
                                  detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
                                  ms=_ms(t0)))
 
-        # 监控记录（V2.2.2）
+        # 监控记录（V2.2.2；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
             ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             session_id=session_id or "",
             query=state.user_query,
             enhanced_query=state.enhanced_query,
             intent_tag=state.intent_tag,
-            tool=state.intent_tool,
+            intent_tool=state.intent_tool,
+            tool=state.tools_used[0] if state.tools_used else state.intent_tool,
             tools_used=state.tools_used,
+            tool_inputs=[{"name": c.get("name"), "arguments": c.get("arguments")} for c in calls],
+            tool_results_summary=_summarize_tool_results(tool_results),
+            reply=reply[:2000],
             hits=state.retrieval_hits,
             degraded=state.degraded,
             fallback=fallback_used,
