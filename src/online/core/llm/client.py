@@ -47,6 +47,12 @@ class LLMClient:
             base_url=base_url or settings.deepseek_base_url,
             timeout=timeout or settings.deepseek_timeout,
         )
+        # 最近一次 function_call 的原始响应（content / tool_calls 摘要），供监控排查
+        self._last_function_call_raw = ""
+
+    def get_last_function_call_raw(self, limit: int = 300) -> str:
+        """最近一次 function_call 的原始响应文本（截断），供监控时间线展示。"""
+        return (self._last_function_call_raw or "")[:limit]
 
     # --------------------------------------------------------
     # 非流式补全
@@ -133,8 +139,16 @@ class LLMClient:
             raise LLMError(f"LLM 意图识别失败: {e}") from e
 
         if not resp.choices:
+            self._last_function_call_raw = ""  # 空响应
             return []  # 空响应视为"无工具调用"
         message = resp.choices[0].message
+        # 记录原始响应（供监控排查：模型为何没调用工具）
+        if message.tool_calls:
+            self._last_function_call_raw = json.dumps(
+                [{"name": tc.function.name, "arguments": tc.function.arguments}
+                 for tc in message.tool_calls], ensure_ascii=False)
+        else:
+            self._last_function_call_raw = (message.content or "")[:500]
         parsed: List[Dict[str, Any]] = []
 
         # 格式 1：标准 tool_calls
