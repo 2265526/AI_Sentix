@@ -16,19 +16,67 @@ services/chat_service.py —— 文本对话服务编排
   - 二次回调失败：返回预置兜底话术，保证接口不 500。
 """
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional
 
+from src.online.core.agent import params
 from src.online.core.agent.enricher import enrich_query
 from src.online.core.agent.intent import detect_intent
 from src.online.core.agent.router import execute_tool_calls
 from src.online.core.llm.client import LLMClient
 from src.online.core.llm.prompt_templates import CUSTOMER_SERVICE_PROMPT, FALLBACK_REPLY
 from src.online.core.memory import extractor
+from src.online.core.monitor import MonitorRequest, MonitorStep, monitor_store
 from src.online.db.repositories import memory_repo
 
 logger = logging.getLogger(__name__)
+
+
+def _ms(t0: float) -> int:
+    """耗时（毫秒）。"""
+    return int(round((time.time() - t0) * 1000))
+
+# SKU 模式（如 G054000 / IP15PM256）
+_SKU_RE = re.compile(r"^[A-Za-z]{1,4}\d{3,}$|^\d{6,}$")
+
+# 预分类标签 → 兜底工具（模型未调用工具时的决策兜底）
+_FALLBACK_TOOL = {
+    "INVENTORY": "get_product_inventory",
+    "PRICE": "get_product_price",
+    "RECOMMEND": "product_recommendation",
+}
+
+
+def _has_product_signal(query: str) -> bool:
+    """query 是否含明确的商品检索信号（品牌 / 品类 / SKU / 价格词）。"""
+    if not query:
+        return False
+    if _SKU_RE.search(query):
+        return True
+    if params.extract_brand(query):
+        return True
+    low = query.lower()
+    if any(w.lower() in low for w in params.CATEGORY_WORDS):
+        return True
+    return any(w in query for w in ("有货", "现货", "库存", "多少钱", "价格", "推荐", "发货"))
+
+
+def _fallback_tool_call(intent_tag: Optional[str], query: str) -> Optional[Dict[str, Any]]:
+    """
+    决策兜底：模型未调用工具时，依据预分类标签 / 商品词信号强制走一次结构化检索。
+    返回兜底 tool_call 或 None（纯寒暄/FAQ 语义不兜底商品检索）。
+    """
+    if intent_tag == "FAQ":
+        return None  # 售后/使用说明语义走知识库，不强制商品检索
+    if intent_tag in _FALLBACK_TOOL:
+        return {"name": _FALLBACK_TOOL[intent_tag], "arguments": {"product_name": query}}
+    if _has_product_signal(query):
+        # 预分类未命中但含商品词（如'休闲，宽松的衬衫'）→ 按导购语义走推荐检索
+        return {"name": "product_recommendation", "arguments": {"product_name": query}}
+    return None
 
 
 @dataclass
@@ -115,8 +163,8 @@ class ChatService:
         intent,
         tool_results: List[Dict[str, Any]],
         tool_failed: bool,
-    ) -> None:
-        """回写会话上下文与交互日志；任何异常仅记日志，不阻断主链路。"""
+    ) -> bool:
+        """回写会话上下文与交互日志；任何异常仅记日志不阻断主链路。返回是否成功。"""
         try:
             if tool_failed or not tool_results:
                 # 工具执行失败/无结果：不更新实体，仅轮次+1、刷新 TTL（保留旧快照）
@@ -136,12 +184,14 @@ class ChatService:
                 result_count=len(tool_results),
                 entities=entities,
             )
+            return True
         except Exception as e:
             logger.warning("chat: 记忆回写失败: %s", e)
             try:
                 conn.rollback()  # 恢复事务，避免影响请求内后续 SQL
             except Exception:
                 pass
+            return False
 
     # --------------------------------------------------------
     # 内部：组装二次回调消息
@@ -171,48 +221,117 @@ class ChatService:
     ) -> Dict[str, Any]:
         """完整对话一轮，返回 {reply, intent, tools_used, context_reset, original_query, enriched_query}。"""
         state = ChatState(user_query=query)
+        steps: List[MonitorStep] = []
+        fallback_used = False
+        llm_ok = True
+        t_total = time.time()
 
         # ①② 记忆读取 + 问题增强（session_id 为空则跳过，行为与旧版一致）
         if session_id:
+            t0 = time.time()
             memory = self._load_memory(conn, session_id, query, history)
             state.enhanced_query = memory["enhanced_query"]
             state.context_reset = memory["context_reset"]
+            steps.append(MonitorStep(
+                stage="memory",
+                status="ok" if not state.context_reset else "degraded",
+                detail=f"读会话上下文 + 问题增强（context_reset={state.context_reset}）",
+                ms=_ms(t0),
+            ))
         else:
             state.enhanced_query = query
 
-        # ③④ 意图识别（预分类限制工具集）+ 工具执行
+        # ③ 意图识别（预分类限制工具集）
+        t0 = time.time()
         intent = detect_intent(self.llm, state.enhanced_query, history)
         state.intent_tag = intent.intent
         state.intent_tool = intent.first_tool_name
+        steps.append(MonitorStep(
+            stage="intent",
+            status="error" if intent.error else "ok",
+            detail=f"预分类={state.intent_tag or '无'} 工具={state.intent_tool or '无'}",
+            ms=_ms(t0),
+            extra={"error": intent.error} if intent.error else {},
+        ))
+
+        # ④ 工具调用：模型未调用但商品词信号明确时，决策兜底强制检索一次
+        calls = list(intent.tool_calls)
+        if not calls:
+            fallback = _fallback_tool_call(intent.intent, state.enhanced_query or query)
+            if fallback:
+                fallback_used = True
+                logger.info("chat: 模型未调用工具，决策兜底 %s（query=%r）", fallback["name"], query)
+                calls = [fallback]
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
-        if intent.has_tool_call:
+        if calls:
+            t0 = time.time()
             try:
-                tool_results = execute_tool_calls(conn, intent.tool_calls)
+                tool_results = execute_tool_calls(conn, calls)
                 state.tool_results = tool_results
                 state.tools_used = [tr["name"] for tr in tool_results]
                 state.retrieval_hits = sum(len(tr.get("raw") or []) for tr in tool_results)
-                state.degraded = any("近似匹配" in (tr.get("result") or "") for tr in tool_results)
+                state.degraded = any("相关商品" in (tr.get("result") or "") for tr in tool_results)
+                steps.append(MonitorStep(
+                    stage="tool", status="degraded" if state.degraded else "ok",
+                    detail=f"执行 {state.tools_used} 命中{state.retrieval_hits}"
+                           f"{'（决策兜底）' if fallback_used else ''}"
+                           f"{'（降级）' if state.degraded else ''}",
+                    ms=_ms(t0),
+                    extra={"hits": state.retrieval_hits, "fallback": fallback_used},
+                ))
             except Exception as e:  # 工具执行异常不阻断回答
                 tool_failed = True
-                logger.warning("chat: 工具执行失败 %s: %s", intent.tool_calls, e)
+                logger.warning("chat: 工具执行失败 %s: %s", calls, e)
+                steps.append(MonitorStep(stage="tool", status="error",
+                                         detail=f"工具执行失败: {e}", ms=_ms(t0)))
                 try:
                     conn.rollback()  # 工具 SQL 失败后恢复事务，保证记忆写入/后续可用
                 except Exception:
                     pass
+        else:
+            steps.append(MonitorStep(stage="tool", status="skipped", detail="无工具调用"))
 
         # ⑤ 记忆回写
         if session_id:
-            self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
+            t0 = time.time()
+            save_ok = self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
+            steps.append(MonitorStep(stage="save", status="ok" if save_ok else "error",
+                                     detail="记忆回写" + ("" if save_ok else "失败（不影响对话）"), ms=_ms(t0)))
+        else:
+            steps.append(MonitorStep(stage="save", status="skipped", detail="未启用记忆"))
 
         # ⑥⑦ 二次模型回调（非流式，传增强后问题）
+        t0 = time.time()
         try:
             messages = self._build_reply_messages(state.enhanced_query, history, tool_results)
             reply = self.llm.chat(messages)
         except Exception as e:  # LLM/网络异常统一兜底，保证接口不 500
             logger.error("chat: 二次回调失败: %s", e)
             reply = FALLBACK_REPLY
+            llm_ok = False
+        steps.append(MonitorStep(stage="reply", status="ok" if llm_ok else "error",
+                                 detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
+                                 ms=_ms(t0)))
+
+        # 监控记录（V2.2.2：请求级时间线，供「监控」页面排查）
+        monitor_store.record(MonitorRequest(
+            ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            session_id=session_id or "",
+            query=state.user_query,
+            enhanced_query=state.enhanced_query,
+            intent_tag=state.intent_tag,
+            tool=state.intent_tool,
+            tools_used=state.tools_used,
+            hits=state.retrieval_hits,
+            degraded=state.degraded,
+            fallback=fallback_used,
+            context_reset=state.context_reset,
+            llm_ok=llm_ok,
+            total_ms=_ms(t_total),
+            steps=steps,
+        ))
 
         # trace：请求级可观测日志（意图/工具/召回/降级/耗时）
         logger.info(
@@ -249,36 +368,77 @@ class ChatService:
             {"type": "done"}
         """
         state = ChatState(user_query=query)
+        steps: List[MonitorStep] = []
+        fallback_used = False
+        llm_ok = True
+        t_total = time.time()
 
         # ①② 记忆读取 + 问题增强
         if session_id:
+            t0 = time.time()
             memory = self._load_memory(conn, session_id, query, history)
             state.enhanced_query = memory["enhanced_query"]
             state.context_reset = memory["context_reset"]
+            steps.append(MonitorStep(
+                stage="memory",
+                status="ok" if not state.context_reset else "degraded",
+                detail=f"读会话上下文 + 问题增强（context_reset={state.context_reset}）",
+                ms=_ms(t0),
+            ))
         else:
             state.enhanced_query = query
 
-        # ③④ 意图识别 + 工具执行
+        # ③ 意图识别
+        t0 = time.time()
         intent = detect_intent(self.llm, state.enhanced_query, history)
         state.intent_tag = intent.intent
         state.intent_tool = intent.first_tool_name
+        steps.append(MonitorStep(
+            stage="intent",
+            status="error" if intent.error else "ok",
+            detail=f"预分类={state.intent_tag or '无'} 工具={state.intent_tool or '无'}",
+            ms=_ms(t0),
+            extra={"error": intent.error} if intent.error else {},
+        ))
+
+        # ④ 工具调用：模型未调用但商品词信号明确时，决策兜底强制检索一次
+        calls = list(intent.tool_calls)
+        if not calls:
+            fallback = _fallback_tool_call(intent.intent, state.enhanced_query or query)
+            if fallback:
+                fallback_used = True
+                logger.info("chat_stream: 模型未调用工具，决策兜底 %s（query=%r）", fallback["name"], query)
+                calls = [fallback]
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
-        if intent.has_tool_call:
+        if calls:
+            t0 = time.time()
             try:
-                tool_results = execute_tool_calls(conn, intent.tool_calls)
+                tool_results = execute_tool_calls(conn, calls)
                 state.tool_results = tool_results
                 state.tools_used = [tr["name"] for tr in tool_results]
                 state.retrieval_hits = sum(len(tr.get("raw") or []) for tr in tool_results)
-                state.degraded = any("近似匹配" in (tr.get("result") or "") for tr in tool_results)
+                state.degraded = any("相关商品" in (tr.get("result") or "") for tr in tool_results)
+                steps.append(MonitorStep(
+                    stage="tool", status="degraded" if state.degraded else "ok",
+                    detail=f"执行 {state.tools_used} 命中{state.retrieval_hits}"
+                           f"{'（决策兜底）' if fallback_used else ''}"
+                           f"{'（降级）' if state.degraded else ''}",
+                    ms=_ms(t0),
+                    extra={"hits": state.retrieval_hits, "fallback": fallback_used},
+                ))
             except Exception as e:
                 tool_failed = True
-                logger.warning("chat_stream: 工具执行失败 %s: %s", intent.tool_calls, e)
+                logger.warning("chat_stream: 工具执行失败 %s: %s", calls, e)
+                steps.append(MonitorStep(stage="tool", status="error",
+                                         detail=f"工具执行失败: {e}", ms=_ms(t0)))
                 try:
                     conn.rollback()  # 恢复事务，保证记忆写入/后续可用
                 except Exception:
                     pass
+        else:
+            steps.append(MonitorStep(stage="tool", status="skipped", detail="无工具调用"))
 
         yield {
             "type": "meta",
@@ -291,17 +451,45 @@ class ChatService:
 
         # ⑤ 记忆回写
         if session_id:
-            self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
+            t0 = time.time()
+            save_ok = self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
+            steps.append(MonitorStep(stage="save", status="ok" if save_ok else "error",
+                                     detail="记忆回写" + ("" if save_ok else "失败（不影响对话）"), ms=_ms(t0)))
+        else:
+            steps.append(MonitorStep(stage="save", status="skipped", detail="未启用记忆"))
 
         # ⑥⑦ 二次模型回调（流式，传增强后问题）
         messages = self._build_reply_messages(state.enhanced_query, history, tool_results)
+        t0 = time.time()
         try:
             for delta in self.llm.chat_stream(messages):
                 if delta:
                     yield {"type": "token", "content": delta}
         except Exception as e:  # LLM/网络异常统一兜底，保证 SSE 流不中断
             logger.error("chat_stream: 二次回调失败: %s", e)
+            llm_ok = False
             yield {"type": "token", "content": FALLBACK_REPLY}
+        steps.append(MonitorStep(stage="reply", status="ok" if llm_ok else "error",
+                                 detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
+                                 ms=_ms(t0)))
+
+        # 监控记录（V2.2.2）
+        monitor_store.record(MonitorRequest(
+            ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            session_id=session_id or "",
+            query=state.user_query,
+            enhanced_query=state.enhanced_query,
+            intent_tag=state.intent_tag,
+            tool=state.intent_tool,
+            tools_used=state.tools_used,
+            hits=state.retrieval_hits,
+            degraded=state.degraded,
+            fallback=fallback_used,
+            context_reset=state.context_reset,
+            llm_ok=llm_ok,
+            total_ms=_ms(t_total),
+            steps=steps,
+        ))
 
         # trace：请求级可观测日志
         logger.info(
