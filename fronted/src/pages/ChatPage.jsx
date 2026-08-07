@@ -1,12 +1,21 @@
 import React, { useRef, useState, useEffect } from 'react'
 import { Button, Input, Typography, message, Spin } from 'antd'
-import { RobotOutlined, AudioOutlined } from '@ant-design/icons'
+import { RobotOutlined, AudioOutlined, PlusOutlined } from '@ant-design/icons'
 import { chatTextStream, chatAudio } from '../api.js'
 
 const { TextArea } = Input
 
 // 音量条数量（微信式：一排竖条随音量起伏）
 const VOL_BARS = 15
+
+// 会话标识 localStorage 键：短期记忆按会话隔离，刷新/重开页面不丢
+const SESSION_KEY = 'ai_sentix_session_id'
+
+// 生成会话标识（优先 crypto.randomUUID；非安全上下文时降级随机串）
+const genSessionId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `sid-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
 // 消息：{ role: 'user'|'assistant', content, audioUrl? }
 export default function ChatPage() {
@@ -24,6 +33,16 @@ export default function ChatPage() {
   const audioCtxRef = useRef(null)
   const analyserRef = useRef(null)
   const rafRef = useRef(null)
+
+  // ---------- 会话标识（短期记忆）：localStorage 持久化，刷新/重开不丢 ----------
+  const [sessionId, setSessionId] = useState(() => {
+    const saved = localStorage.getItem(SESSION_KEY)
+    if (saved) return saved
+    const sid = genSessionId()
+    localStorage.setItem(SESSION_KEY, sid)
+    return sid
+  })
+  const sessionIdRef = useRef(sessionId)
 
   const history = messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -90,6 +109,18 @@ export default function ChatPage() {
     if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight
   }, [messages])
 
+  // ---------- 新建会话：重新生成 session_id 覆盖 localStorage，清空消息历史与状态 ----------
+  const resetSession = () => {
+    const sid = genSessionId()
+    localStorage.setItem(SESSION_KEY, sid)
+    sessionIdRef.current = sid
+    setSessionId(sid)
+    setMessages([])
+    setInput('')
+    setLoading(false)
+    setStreaming(false)
+  }
+
   // ---------- 文本发送（回车即发，无发送按钮） ----------
   const send = async () => {
     const text = input.trim()
@@ -99,13 +130,21 @@ export default function ChatPage() {
     setMessages((ms) => [...ms, userMsg])
     setLoading(true)
     setStreaming(false)
+    const sid = sessionIdRef.current // 固定本次请求的会话标识
     try {
-      await chatTextStream(text, history, {
-        onMeta: () => {
+      await chatTextStream(text, history, sid, {
+        onMeta: (evt) => {
+          if (sid !== sessionIdRef.current) return // 已新建会话，忽略旧流回调
+          // 后端短期记忆过期：本地有历史时清空界面并温柔提示，随后开启新对话
+          if (evt.context_reset === true && messages.length > 0) {
+            setMessages([])
+            message.info('会话已过期，已开启新对话')
+          }
           setStreaming(true)
           setMessages((ms) => [...ms, { role: 'assistant', content: '' }])
         },
         onToken: (delta) => {
+          if (sid !== sessionIdRef.current) return
           setMessages((ms) => {
             if (ms.length === 0) return ms
             const last = ms[ms.length - 1]
@@ -114,6 +153,7 @@ export default function ChatPage() {
           })
         },
         onDone: () => {
+          if (sid !== sessionIdRef.current) return
           setStreaming(false)
           setLoading(false)
         },
@@ -164,7 +204,12 @@ export default function ChatPage() {
   const sendAudio = async (blob) => {
     setLoading(true)
     try {
-      const r = await chatAudio(blob, history)
+      const r = await chatAudio(blob, history, sessionIdRef.current)
+      // 语音会话过期：本地有历史时清空并提示，然后展示本轮识别与回复
+      if (r.contextReset && messages.length > 0) {
+        setMessages([])
+        message.info('会话已过期，已开启新对话')
+      }
       setMessages((ms) => [...ms, { role: 'user', content: `🎤 ${r.transcript || '（未识别到语音）'}` }])
       if (r.reply) {
         const audioUrl = URL.createObjectURL(r.audioBlob)
@@ -264,6 +309,12 @@ export default function ChatPage() {
         {/* 输入区：独立卡片（白底圆角，与聊天面板分离），回车即发送；
             麦克风按钮固定在输入框右下角，大小适配输入框 */}
         <div style={{ padding: '8px 24px 16px' }}>
+          {/* 新建会话：生成新 session_id 并清空当前对话（短期记忆重新开始） */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <Button size="small" icon={<PlusOutlined />} onClick={resetSession}>
+              新建会话
+            </Button>
+          </div>
           <div
             style={{
               background: '#fff',
