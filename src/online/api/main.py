@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.common.logger import setup_logging
-from src.online.api.routes import admin, chat, rag
+from src.online.api.routes import admin, chat, monitor, rag
 
 setup_logging()
 
@@ -40,6 +40,7 @@ app.add_middleware(
 app.include_router(rag.router)
 app.include_router(chat.router)
 app.include_router(admin.router)
+app.include_router(monitor.router)
 
 
 @app.get("/health", tags=["health"], summary="健康检查")
