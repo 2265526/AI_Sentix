@@ -309,13 +309,13 @@ function CategoryManager() {
         {tree.length === 0 ? (
           <Typography.Text type="secondary">暂无类目数据</Typography.Text>
         ) : (
-          <Tree
-            showLine
-            defaultExpandAll={false}
-            defaultExpandedKeys={tree.map(n => n.key)}
-            treeData={treeData}
-            style={{ maxHeight: 420, overflow: 'auto' }}
-          />
+          <div style={{ maxHeight: 420, overflow: 'auto', paddingBottom: 16 }}>
+            <Tree
+              showLine
+              defaultExpandedKeys={tree.map(n => n.key)}
+              treeData={treeData}
+            />
+          </div>
         )}
       </Card>
     </div>
@@ -325,7 +325,7 @@ function CategoryManager() {
 // ---------- 管理页 ----------
 export default function AdminPage() {
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto' }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', height: '100%', overflow: 'auto', padding: '16px 0' }}>
       <Alert
         type="warning"
         showIcon
