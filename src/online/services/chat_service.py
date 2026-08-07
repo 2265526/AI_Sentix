@@ -58,6 +58,16 @@ def _summarize_tool_results(tool_results: List[Dict[str, Any]]) -> List[Dict[str
         })
     return out
 
+
+def _accumulate_tokens(prompt: int, completion: int, usage: Dict[str, Any]) -> tuple:
+    """把一次 LLM 调用的 usage 累加进 (prompt_tokens, completion_tokens)。"""
+    if not usage:
+        return prompt, completion
+    return (
+        prompt + int(usage.get("prompt_tokens") or 0),
+        completion + int(usage.get("completion_tokens") or 0),
+    )
+
 # SKU 模式（如 G000115 / 21873056212；子串匹配：'G000115 多少钱' 中也能提取）
 _SKU_RE = re.compile(r"[A-Za-z]{1,4}\d{3,}|\d{6,}")
 
@@ -297,6 +307,8 @@ class ChatService:
         steps: List[MonitorStep] = []
         fallback_used = False
         llm_ok = True
+        prompt_tokens = 0
+        completion_tokens = 0
         t_total = time.time()
 
         # ①② 记忆读取 + 问题增强（session_id 为空则跳过，行为与旧版一致）
@@ -331,6 +343,8 @@ class ChatService:
             ms=_ms(t0),
             extra=intent_extra,
         ))
+        prompt_tokens, completion_tokens = _accumulate_tokens(
+            prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
         # ④ 工具调用：预分类直驱 → LLM tool_calls → 决策兜底（P1-5 不依赖 LLM 选工具）
         calls = _resolve_tool_calls(intent, state.enhanced_query or query)
@@ -390,6 +404,8 @@ class ChatService:
         steps.append(MonitorStep(stage="reply", status="ok" if llm_ok else "error",
                                  detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
                                  ms=_ms(t0)))
+        prompt_tokens, completion_tokens = _accumulate_tokens(
+            prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
         # 监控记录（V2.2.2：请求级时间线；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
@@ -405,6 +421,8 @@ class ChatService:
             tool_results_summary=_summarize_tool_results(tool_results),
             reply=reply[:2000],
             hits=state.retrieval_hits,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             degraded=state.degraded,
             fallback=fallback_used,
             context_reset=state.context_reset,
@@ -451,6 +469,8 @@ class ChatService:
         steps: List[MonitorStep] = []
         fallback_used = False
         llm_ok = True
+        prompt_tokens = 0
+        completion_tokens = 0
         t_total = time.time()
 
         # ①② 记忆读取 + 问题增强
@@ -485,6 +505,8 @@ class ChatService:
             ms=_ms(t0),
             extra=intent_extra,
         ))
+        prompt_tokens, completion_tokens = _accumulate_tokens(
+            prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
         # ④ 工具调用：预分类直驱 → LLM tool_calls → 决策兜底（P1-5 不依赖 LLM 选工具）
         calls = _resolve_tool_calls(intent, state.enhanced_query or query)
@@ -559,6 +581,8 @@ class ChatService:
         steps.append(MonitorStep(stage="reply", status="ok" if llm_ok else "error",
                                  detail=f"二次模型回调 {'成功' if llm_ok else '失败，返回兜底话术'}",
                                  ms=_ms(t0)))
+        prompt_tokens, completion_tokens = _accumulate_tokens(
+            prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
         # 监控记录（V2.2.2；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
@@ -574,6 +598,8 @@ class ChatService:
             tool_results_summary=_summarize_tool_results(tool_results),
             reply=reply[:2000],
             hits=state.retrieval_hits,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             degraded=state.degraded,
             fallback=fallback_used,
             context_reset=state.context_reset,
