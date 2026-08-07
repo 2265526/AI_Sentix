@@ -21,6 +21,7 @@ from typing import List, Tuple
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from psycopg2.extensions import connection
 
+from src.common.constants import ALLOWED_DOC_TYPES
 from src.online.db.session import get_db
 from src.offline.etl.category_classifier import classify_by_keywords
 from src.offline.etl.knowledge_importer import (
@@ -33,8 +34,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# 支持的文档类型（与 kb_documents.doc_type 数据一致）
-ALLOWED_DOC_TYPES = ("product_manual", "faq", "policy")
+# 支持的文档类型（统一见 src/common/constants.py）
 ALLOWED_TEXT_EXT = (".txt", ".md")
 ALLOWED_PDF_EXT = (".pdf")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB

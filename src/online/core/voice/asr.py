@@ -19,16 +19,18 @@ import os
 import threading
 from typing import Optional
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
-# 模型尺寸：small 中文准确率与速度均衡；如追求更快可改 "base"
-_MODEL_SIZE = "small"
+# 模型尺寸（settings.whisper_model_size，默认 small：中文准确率与速度均衡；如追求更快可改 "base"）
+_MODEL_SIZE = settings.whisper_model_size
 # 本地模型目录（~/.cache 的 HF 缓存复制版）：存在则直接加载，跳过 HuggingFace 联网校验
 # （实测每次 WhisperModel('small') 都会联网校验缓存，网络慢时加载卡几分钟）
 DEFAULT_LOCAL_MODEL = os.path.expanduser("~/whisper-small")
 # 推理设备：默认自动探测（有 CUDA 用 GPU/float16，否则 CPU/int8）；
 # 可通过环境变量 ASR_DEVICE=cpu 强制 CPU、ASR_DEVICE=cuda 强制 GPU（GPU 加载异常时回退用）
-_DEVICE = os.getenv("ASR_DEVICE") or None
+_DEVICE = settings.asr_device or None
 _COMPUTE_TYPE = None
 
 _model = None
@@ -54,7 +56,7 @@ def _resolve_model_source() -> str:
 
     本地路径加载完全离线、秒级校验；模型名加载会走 HuggingFace 缓存校验（网络慢时卡顿）。
     """
-    path = (os.getenv("WHISPER_MODEL_PATH") or "").strip()
+    path = settings.whisper_model_path.strip()
     if path:
         return path
     if os.path.isdir(DEFAULT_LOCAL_MODEL):

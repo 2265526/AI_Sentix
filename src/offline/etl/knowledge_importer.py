@@ -35,30 +35,36 @@ import json
 import time
 import argparse
 import glob
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import psycopg2
 from pgvector.psycopg2 import register_vector
 from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from dotenv import load_dotenv
 
-load_dotenv()
+# 项目根加入 sys.path：保证以 `python src/offline/etl/knowledge_importer.py` 直接运行时，
+# 也能 import config.settings（统一配置入口）
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config.settings import settings  # noqa: E402
 
 # ============================================================
-# 配置（与 shopee_importer.py 同风格）
+# 配置（统一取自 config/settings.py，值来自 .env / Settings.from_env 默认值）
 # ============================================================
-EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
-EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "ollama")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
-DATABASE_URL = os.getenv("DATABASE_URL")
+EMBEDDING_BASE_URL = settings.embedding_base_url
+EMBEDDING_API_KEY = settings.embedding_api_key
+EMBEDDING_MODEL = settings.embedding_model
+EMBEDDING_DIM = settings.embedding_dim
+DATABASE_URL = settings.database_url
 if not DATABASE_URL:
     print("❌ 未配置 DATABASE_URL，请在 .env 中设置")
     sys.exit(1)
 
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
+CHUNK_SIZE = settings.etl_chunk_size
+CHUNK_OVERLAP = settings.etl_chunk_overlap
 SUPPORTED_EXT = (".docx", ".txt", ".md")
 
 # ============================================================

@@ -19,12 +19,15 @@
 """
 from typing import Callable, List, Optional
 
+from src.common.constants import (
+    BM25_ONLY_DISCOUNT,
+    DEFAULT_BM25_WEIGHT,
+    DEFAULT_THRESHOLD,
+    DEFAULT_TOP_K,
+    DEFAULT_VECTOR_WEIGHT,
+    SINGLE_ROUTE_DISCOUNT,
+)
 from .retriever import ChunkHit
-
-DEFAULT_THRESHOLD = 0.4
-DEFAULT_TOP_K = 5
-DEFAULT_VECTOR_WEIGHT = 0.7
-DEFAULT_BM25_WEIGHT = 0.3
 
 
 class Reranker:
@@ -36,8 +39,8 @@ class Reranker:
         top_k: int = DEFAULT_TOP_K,
         vector_weight: float = DEFAULT_VECTOR_WEIGHT,
         bm25_weight: float = DEFAULT_BM25_WEIGHT,
-        single_route_discount: float = 1.0,
-        bm25_only_discount: float = 0.7,
+        single_route_discount: float = SINGLE_ROUTE_DISCOUNT,
+        bm25_only_discount: float = BM25_ONLY_DISCOUNT,
         score_fn: Optional[Callable[[str, str], float]] = None,
     ):
         """

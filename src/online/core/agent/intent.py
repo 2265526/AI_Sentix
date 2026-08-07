@@ -1,21 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-core/agent/intent.py —— 意图识别（LLM function calling）
-=========================================================
+core/agent/intent.py —— 意图识别（意图预分类 + LLM function calling）
+=========================================================================
 对应《开发文档》阶段三任务 1：
   "在'意图识别'环节，大模型输出 tool_call"
 
-流程：把用户问题 + 工具 schema 交给 LLM，模型返回要调用的工具及参数；
+V2.2.2 架构优化（调研方案 P0「intent 与 tool selection 分离」）：
+  - 先由规则预分类器 _classify_intent 输出意图标签（FAQ / RECOMMEND /
+    PRICE / INVENTORY）；
+  - 命中时把 function calling 的工具集限制为该意图对应的原子工具，
+    避免 LLM 在全部工具间误选（如"手机进水怎么办"误判为商品推荐）；
+  - 未命中则走全量工具（保持原有能力）。
+
+流程：把用户问题 + （受限的）工具 schema 交给 LLM，模型返回要调用的工具及参数；
 无工具调用 → 视为普通对话，直接由客服回答。
 
 返回结构：
     IntentResult.tool_calls = [{"id", "name", "arguments": dict}, ...]
 """
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Dict, List, Optional
 
+from src.common.exceptions import LLMError
 from src.online.core.agent.tools import TOOLS, TOOL_NAMES
-from src.online.core.llm.client import INTENT_SYSTEM_PROMPT, LLMClient, LLMError
+from src.online.core.llm.client import LLMClient
+from src.online.core.llm.prompt_templates import INTENT_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -26,6 +38,8 @@ class IntentResult:
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     # 意图识别阶段是否发生了 LLM 错误（由上层决定兜底策略）
     error: Optional[str] = None
+    # 预分类意图标签（规则分类器输出，供 trace / 链路观测）
+    intent: Optional[str] = None
 
     @property
     def has_tool_call(self) -> bool:
@@ -34,6 +48,40 @@ class IntentResult:
     @property
     def first_tool_name(self) -> Optional[str]:
         return self.tool_calls[0]["name"] if self.tool_calls else None
+
+
+# ------------------------------------------------------------
+# 规则意图预分类：intent 分类与 tool selection 分离（调研方案 P0）
+# 命中强信号词时，限制 function calling 的工具集，避免 LLM 误调用
+# （如"手机进水怎么办"被误判为商品推荐）。未命中则走全量工具。
+# ------------------------------------------------------------
+_INTENT_RULES = [
+    # 售后 / 使用说明类（最优先：'手机进水怎么办' 必须走知识库而非商品检索）
+    ("FAQ", ("怎么办", "坏了", "进水", "售后", "保修", "退换", "退货", "退款", "政策",
+             "使用说明", "怎么用", "怎么修", "故障", "维修", "订单", "发票", "运费", "投诉")),
+    # 推荐类
+    ("RECOMMEND", ("推荐", "适合", "送礼", "送人", "送男", "送女", "送老", "性价比高", "挑几款")),
+    # 价格类
+    ("PRICE", ("多少钱", "价格", "售价", "贵不贵", "价位", "便宜吗")),
+    # 库存 / 物流类
+    ("INVENTORY", ("有货", "库存", "现货", "几天", "发货", "仓库", "物流", "配送", "到货")),
+]
+
+# 预分类 → 可用工具子集（命中时只给这些工具，选择准确率更高）
+_TOOLS_BY_INTENT = {
+    "FAQ": [t for t in TOOLS if t["function"]["name"] == "get_knowledge_base"],
+    "RECOMMEND": [t for t in TOOLS if t["function"]["name"] == "product_recommendation"],
+    "PRICE": [t for t in TOOLS if t["function"]["name"] == "get_product_price"],
+    "INVENTORY": [t for t in TOOLS if t["function"]["name"] == "get_product_inventory"],
+}
+
+
+def _classify_intent(query: str) -> Optional[str]:
+    """规则意图预分类：命中强信号词返回意图标签，否则 None（不限制工具集）。"""
+    for intent, words in _INTENT_RULES:
+        if any(w in query for w in words):
+            return intent
+    return None
 
 
 def _fill_default_arguments(
@@ -85,10 +133,15 @@ def detect_intent(
         IntentResult：tool_calls 为空表示无需工具，直接对话。
     """
     messages = LLMClient.build_messages(INTENT_SYSTEM_PROMPT, query, history)
+    # 规则预分类：命中强信号词时限制工具集（intent 与 tool selection 分离）
+    intent_tag = _classify_intent(query)
+    tools = _TOOLS_BY_INTENT.get(intent_tag, TOOLS)
+    if tools is not TOOLS:
+        logger.info("intent: 预分类 %s → 工具集限制为 %s 个", intent_tag, len(tools))
     try:
-        tool_calls = llm.function_call(messages, TOOLS)
+        tool_calls = llm.function_call(messages, tools)
     except LLMError as e:
-        return IntentResult(query=query, error=str(e))
+        return IntentResult(query=query, error=str(e), intent=intent_tag)
 
     # 容错：
     #  - 工具名不在 schema 中（或别名无法归一化）时忽略该调用；
@@ -109,4 +162,4 @@ def detect_intent(
         tc["name"] = name
         tc["arguments"] = args
         valid.append(tc)
-    return IntentResult(query=query, tool_calls=valid)
+    return IntentResult(query=query, tool_calls=valid, intent=intent_tag)

@@ -16,6 +16,8 @@ services/chat_service.py —— 文本对话服务编排
   - 二次回调失败：返回预置兜底话术，保证接口不 500。
 """
 import logging
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
 
 from src.online.core.agent.enricher import enrich_query
@@ -27,6 +29,27 @@ from src.online.core.memory import extractor
 from src.online.db.repositories import memory_repo
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ChatState:
+    """
+    单次对话的结构化状态（调研方案 P0「structured state」）。
+
+    贯穿 ①记忆读取 → ②增强 → ③意图 → ④工具 → ⑤回写 → ⑥⑦二次回调 全链路，
+    让每个环节的产出可观测（trace）、可扩展。
+    """
+
+    user_query: str                                   # 用户原始问题
+    enhanced_query: str = ""                          # 增强后问题（enricher 输出）
+    context_reset: bool = False                       # 会话过期/切换信号
+    intent_tag: Optional[str] = None                  # 预分类意图标签（规则分类器）
+    intent_tool: Optional[str] = None                 # 实际选择的工具名
+    tools_used: List[str] = field(default_factory=list)  # 实际执行的工具
+    tool_results: List[Dict[str, Any]] = field(default_factory=list)
+    degraded: bool = False                            # 结构化检索是否降级命中
+    retrieval_hits: int = 0                           # 检索召回条数（RAG/结构化）
+    started_at: float = field(default_factory=time.time)  # 请求开始时间（trace）
 
 
 class ChatService:
@@ -147,24 +170,30 @@ class ChatService:
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """完整对话一轮，返回 {reply, intent, tools_used, context_reset, original_query, enriched_query}。"""
+        state = ChatState(user_query=query)
+
         # ①② 记忆读取 + 问题增强（session_id 为空则跳过，行为与旧版一致）
-        enhanced_query = query
-        context_reset = False
-        original_query = query
         if session_id:
             memory = self._load_memory(conn, session_id, query, history)
-            enhanced_query = memory["enhanced_query"]
-            context_reset = memory["context_reset"]
-            original_query = memory["original"]
+            state.enhanced_query = memory["enhanced_query"]
+            state.context_reset = memory["context_reset"]
+        else:
+            state.enhanced_query = query
 
-        # ③④ 意图识别 + 工具执行
-        intent = detect_intent(self.llm, enhanced_query, history)
+        # ③④ 意图识别（预分类限制工具集）+ 工具执行
+        intent = detect_intent(self.llm, state.enhanced_query, history)
+        state.intent_tag = intent.intent
+        state.intent_tool = intent.first_tool_name
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
         if intent.has_tool_call:
             try:
                 tool_results = execute_tool_calls(conn, intent.tool_calls)
+                state.tool_results = tool_results
+                state.tools_used = [tr["name"] for tr in tool_results]
+                state.retrieval_hits = sum(len(tr.get("raw") or []) for tr in tool_results)
+                state.degraded = any("近似匹配" in (tr.get("result") or "") for tr in tool_results)
             except Exception as e:  # 工具执行异常不阻断回答
                 tool_failed = True
                 logger.warning("chat: 工具执行失败 %s: %s", intent.tool_calls, e)
@@ -175,23 +204,31 @@ class ChatService:
 
         # ⑤ 记忆回写
         if session_id:
-            self._save_memory(conn, session_id, query, enhanced_query, intent, tool_results, tool_failed)
+            self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
 
         # ⑥⑦ 二次模型回调（非流式，传增强后问题）
         try:
-            messages = self._build_reply_messages(enhanced_query, history, tool_results)
+            messages = self._build_reply_messages(state.enhanced_query, history, tool_results)
             reply = self.llm.chat(messages)
         except Exception as e:  # LLM/网络异常统一兜底，保证接口不 500
             logger.error("chat: 二次回调失败: %s", e)
             reply = FALLBACK_REPLY
 
+        # trace：请求级可观测日志（意图/工具/召回/降级/耗时）
+        logger.info(
+            "chat trace: query=%r intent_tag=%s tool=%s tools=%s hits=%d degraded=%s ctx_reset=%s %.2fs",
+            state.user_query, state.intent_tag, state.intent_tool, state.tools_used,
+            state.retrieval_hits, state.degraded, state.context_reset,
+            time.time() - state.started_at,
+        )
+
         return {
             "reply": reply,
-            "intent": intent.first_tool_name,
-            "tools_used": [tr["name"] for tr in tool_results],
-            "context_reset": context_reset,
-            "original_query": original_query,
-            "enriched_query": enhanced_query,
+            "intent": state.intent_tool,
+            "tools_used": state.tools_used,
+            "context_reset": state.context_reset,
+            "original_query": state.user_query,
+            "enriched_query": state.enhanced_query,
         }
 
     # --------------------------------------------------------
@@ -211,24 +248,30 @@ class ChatService:
             {"type": "token", "content": "..."}
             {"type": "done"}
         """
+        state = ChatState(user_query=query)
+
         # ①② 记忆读取 + 问题增强
-        enhanced_query = query
-        context_reset = False
-        original_query = query
         if session_id:
             memory = self._load_memory(conn, session_id, query, history)
-            enhanced_query = memory["enhanced_query"]
-            context_reset = memory["context_reset"]
-            original_query = memory["original"]
+            state.enhanced_query = memory["enhanced_query"]
+            state.context_reset = memory["context_reset"]
+        else:
+            state.enhanced_query = query
 
         # ③④ 意图识别 + 工具执行
-        intent = detect_intent(self.llm, enhanced_query, history)
+        intent = detect_intent(self.llm, state.enhanced_query, history)
+        state.intent_tag = intent.intent
+        state.intent_tool = intent.first_tool_name
 
         tool_results: List[Dict[str, Any]] = []
         tool_failed = False
         if intent.has_tool_call:
             try:
                 tool_results = execute_tool_calls(conn, intent.tool_calls)
+                state.tool_results = tool_results
+                state.tools_used = [tr["name"] for tr in tool_results]
+                state.retrieval_hits = sum(len(tr.get("raw") or []) for tr in tool_results)
+                state.degraded = any("近似匹配" in (tr.get("result") or "") for tr in tool_results)
             except Exception as e:
                 tool_failed = True
                 logger.warning("chat_stream: 工具执行失败 %s: %s", intent.tool_calls, e)
@@ -239,19 +282,19 @@ class ChatService:
 
         yield {
             "type": "meta",
-            "intent": intent.first_tool_name,
-            "tools_used": [tr["name"] for tr in tool_results],
-            "original": original_query,
-            "enriched": enhanced_query,
-            "context_reset": context_reset,
+            "intent": state.intent_tool,
+            "tools_used": state.tools_used,
+            "original": state.user_query,
+            "enriched": state.enhanced_query,
+            "context_reset": state.context_reset,
         }
 
         # ⑤ 记忆回写
         if session_id:
-            self._save_memory(conn, session_id, query, enhanced_query, intent, tool_results, tool_failed)
+            self._save_memory(conn, session_id, query, state.enhanced_query, intent, tool_results, tool_failed)
 
         # ⑥⑦ 二次模型回调（流式，传增强后问题）
-        messages = self._build_reply_messages(enhanced_query, history, tool_results)
+        messages = self._build_reply_messages(state.enhanced_query, history, tool_results)
         try:
             for delta in self.llm.chat_stream(messages):
                 if delta:
@@ -259,5 +302,13 @@ class ChatService:
         except Exception as e:  # LLM/网络异常统一兜底，保证 SSE 流不中断
             logger.error("chat_stream: 二次回调失败: %s", e)
             yield {"type": "token", "content": FALLBACK_REPLY}
+
+        # trace：请求级可观测日志
+        logger.info(
+            "chat_stream trace: query=%r intent_tag=%s tool=%s tools=%s hits=%d degraded=%s ctx_reset=%s %.2fs",
+            state.user_query, state.intent_tag, state.intent_tool, state.tools_used,
+            state.retrieval_hits, state.degraded, state.context_reset,
+            time.time() - state.started_at,
+        )
 
         yield {"type": "done"}

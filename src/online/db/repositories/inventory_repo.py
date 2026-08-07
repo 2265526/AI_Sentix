@@ -22,12 +22,9 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2.extras
 
+from src.common.utils import like_pattern
+
 _MAX_RESULTS = 5
-
-
-def _like_pattern(keyword: str) -> str:
-    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
 
 
 def _filters(
@@ -50,7 +47,7 @@ def _filters(
 
     if product_name:
         clauses.append("p.product_name ILIKE %s ESCAPE '\\'")
-        params.append(_like_pattern(product_name))
+        params.append(like_pattern(product_name))
 
     if category_big:
         clauses.append("p.category_big = %s")
@@ -62,7 +59,7 @@ def _filters(
 
     if category_path:
         clauses.append("p.category_path ILIKE %s ESCAPE '\\'")
-        params.append(_like_pattern(category_path))
+        params.append(like_pattern(category_path))
 
     if min_price is not None:
         clauses.append("p.price >= %s")

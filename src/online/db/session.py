@@ -14,33 +14,32 @@ db/session.py —— 数据库会话管理
     def search(req: RAGSearchRequest, conn=Depends(get_db)):
         ...
 """
-import os
 import threading
 
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from dotenv import load_dotenv
 from pgvector.psycopg2 import register_vector
 
-load_dotenv()
+from config.settings import settings
+from src.common.exceptions import ConfigError
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = settings.database_url
 if not DATABASE_URL:
-    raise RuntimeError(
+    raise ConfigError(
         "未配置 DATABASE_URL 环境变量（请检查 .env）："
         "postgresql://user:password@host:port/dbname"
     )
 
 # pgvector 类型适配器：pgvector 0.5.x 的 register_vector 需按连接注册，
 # 在借出连接时调用（幂等；池内连接对象复用，注册一次持续有效）
-_POOL_SIZE = 10
+_POOL_SIZE = settings.db_pool_size
 _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=_POOL_SIZE, dsn=DATABASE_URL)
 
-# 信号量：限制同时借出的连接数并支持获取超时（池满时 5 秒内拿不到即报错，
+# 信号量：限制同时借出的连接数并支持获取超时（池满时拿不到即报错，
 # 避免 psycopg2 SimpleConnectionPool.getconn 在池满时无限阻塞挂死）
 _semaphore = threading.BoundedSemaphore(_POOL_SIZE)
-_POOL_TIMEOUT = 5.0
+_POOL_TIMEOUT = settings.db_pool_timeout
 
 
 def _register(conn) -> None:

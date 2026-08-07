@@ -60,7 +60,7 @@ def format_kb(chunks: List[Dict[str, Any]], max_chars: int = 1500) -> str:
     把知识分块格式化为给 LLM 的参考文本（含来源标签，超长截断）。
     """
     if not chunks:
-        return "知识库未检索到相关内容。"
+        return "知识库未检索到相关内容（该问题暂未收录，建议咨询人工客服或换个问法）。"
     parts = []
     total = 0
     for i, c in enumerate(chunks):

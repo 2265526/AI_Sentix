@@ -6,6 +6,13 @@ core/agent/router.py —— 服务路由（工具调用分发）
   (1) get_product_inventory / get_product_price → SQL 检索 → 返回严格参数
   (2) get_knowledge_base / product_recommendation → 调用阶段二 RAG 引擎
 
+V2.2.1 架构优化（检索参数归一化 + 统一降级链）：
+  - LLM 输出的 arguments 先经 params.normalize_arguments 归一化
+    （清洗意图词 / 文本价格解析），永不直通 SQL；
+  - 结构化检索走统一多级降级链 _structured_search：
+      L1 归一化名称精确 → L2 品牌 + 类目组合 → L3 类目检索 → L4 型号/核心词 → 空
+    覆盖「整句塞 product_name」「只给类目不给关键词」等模型输出缺陷。
+
 分发规则：
   - 结构化工具：product_repo / inventory_repo（精确数值，参数化 SQL）
   - RAG 工具：kb_repo（混合检索 + Rerank）
@@ -16,17 +23,13 @@ from typing import Any, Dict, List, Optional
 
 import jieba
 
+from src.common.constants import ALLOWED_DOC_TYPES
+from src.online.core.agent import params
 from src.online.db.repositories import inventory_repo, kb_repo, product_repo
 from src.online.core.agent.tools import RAG_TOOLS, SQL_TOOLS, TOOL_NAMES
 from src.offline.etl.category_classifier import CATEGORY_TREE
 
 logger = logging.getLogger(__name__)
-
-# 推荐场景修饰词（模型可能把整句塞进 product_name，检索前剔除这些词提取核心实体）
-_RECOMMEND_STOP = frozenset(
-    "推荐 适合 送 几款 款 个 以内 的 吗 么 什么 有什么 想要 要 好 点 一些 件 条 台 只 个 "
-    "帮我 给我 我想 我要 有没有 可以 怎么 这样 那种 类似".split()
-)
 
 # 类目词表（大类/中类/小类名，按长度降序），用于从整句中识别核心品类词
 _CATEGORY_WORDS: List[str] = sorted(
@@ -36,13 +39,20 @@ _CATEGORY_WORDS: List[str] = sorted(
 )
 _CATEGORY_WORDS_SET = frozenset(_CATEGORY_WORDS)
 
-# 常见口语商品词 → 标准类目小类名（用于识别类目词表外的高频词）
-_CATEGORY_SYNONYMS = {
-    "跑步鞋": "运动鞋", "跑鞋": "运动鞋", "球鞋": "运动鞋",
-    "智能手机": "智能手机", "手机壳": "手机壳", "女装": "女装", "男装": "男装",
-    "裙子": "连衣裙", "毛衣": "毛衣", "卫衣": "卫衣", "裤子": "裤装",
-    "拖鞋": "拖鞋", "凉鞋": "凉鞋", "外套": "外套", "大衣": "大衣",
-}
+# 类目词 → 过滤层级映射（大类词→category_big，中类词→category_path，小类词→category_small）
+_CATEGORY_LEVEL: Dict[str, tuple] = {}
+for _big, _middles in CATEGORY_TREE.items():
+    _CATEGORY_LEVEL.setdefault(_big, ("category_big", _big))
+    for _mid, _smalls in _middles.items():
+        _CATEGORY_LEVEL.setdefault(_mid, ("category_path", f"{_big}/{_mid}"))
+        for _s in _smalls:
+            _CATEGORY_LEVEL.setdefault(_s, ("category_small", _s))
+
+# 推荐场景修饰词（RAG 类目映射时剔除）
+_RECOMMEND_STOP = frozenset(
+    "推荐 适合 送 几款 款 个 以内 的 吗 么 什么 有什么 想要 要 好 点 一些 件 条 台 只 "
+    "帮我 给我 我想 我要 有没有 可以 怎么 这样 那种 类似".split()
+)
 
 # 模型可能用别名键填参（实测：product / query / category / product_type 等），做键名归一化
 _KEY_ALIASES: Dict[str, tuple] = {
@@ -59,9 +69,6 @@ _KEY_ALIASES: Dict[str, tuple] = {
     "in_stock_only": ("in_stock_only", "inStock", "有货", "仅看有货"),
 }
 
-# doc_type 白名单（与 kb_documents.doc_type 数据一致）
-_ALLOWED_DOC_TYPES = ("product_manual", "faq", "policy")
-
 
 def _arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
     """从工具参数中安全取值：支持别名键；缺失/非字符串返回 None。"""
@@ -74,51 +81,14 @@ def _arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
     return None
 
 
-def _num_arg(arguments: Dict[str, Any], key: str) -> Optional[float]:
-    """数值型参数取值（价格区间等）：兼容数字与数字字符串；非法值返回 None。"""
-    if not isinstance(arguments, dict):
-        return None
-    for alias in _KEY_ALIASES.get(key, (key,)):
-        val = arguments.get(alias)
-        if isinstance(val, bool):
-            continue
-        if isinstance(val, (int, float)):
-            return float(val)
-        if isinstance(val, str) and val.strip():
-            try:
-                return float(val)
-            except ValueError:
-                continue
-    return None
-
-
-def _bool_arg(arguments: Dict[str, Any], key: str) -> bool:
-    """布尔型参数取值（有库存过滤等）：兼容 True/False 与常见真值字符串。"""
-    if not isinstance(arguments, dict):
-        return False
-    for alias in _KEY_ALIASES.get(key, (key,)):
-        val = arguments.get(alias)
-        if isinstance(val, bool):
-            return val
-        if isinstance(val, (int, float)):
-            return val > 0
-        if isinstance(val, str):
-            v = val.strip().lower()
-            if v in ("1", "true", "yes", "是", "有", "有货"):
-                return True
-            if v in ("0", "false", "no", "否", "无"):
-                return False
-    return False
-
-
 def _doc_type_arg(arguments: Dict[str, Any]) -> Optional[str]:
     """doc_type 参数白名单校验：非法值返回 None（不过滤）。"""
     dt = _arg(arguments, "doc_type")
-    return dt if dt in _ALLOWED_DOC_TYPES else None
+    return dt if dt in ALLOWED_DOC_TYPES else None
 
 
 def _core_keywords(text: str) -> List[str]:
-    """从（可能是整句的）需求文本中提取核心商品词。
+    """从（可能是整句的）需求文本中提取核心商品词（供 RAG 类目映射）。
 
     策略：
       1. 优先匹配类目词表（大类/中类/小类名，最长优先）——如"适合送长辈的智能手表"→"智能手表"；
@@ -138,10 +108,6 @@ def _core_keywords(text: str) -> List[str]:
                 and not t.strip().isdigit()
             ]
             return [w, *dict.fromkeys(others)]
-    # 1.5) 口语同义词 → 标准类目词（如"跑步鞋"→"运动鞋"）
-    for slang, standard in _CATEGORY_SYNONYMS.items():
-        if slang in text:
-            return [standard]
     # 2) jieba 分词兜底（保序去重，长度降序稳定排列）
     toks = list(dict.fromkeys(
         t.strip()
@@ -151,22 +117,88 @@ def _core_keywords(text: str) -> List[str]:
     return sorted(toks, key=len, reverse=True)
 
 
-def _brand_words(text: str) -> list:
-    """从需求文本中提取非类目实体词（品牌/型号，如 iphone、小米、Mate）。
-
-    与 _core_keywords 互补：_core_keywords 优先类目词（"iphone手机"→["手机"]），
-    _brand_words 提取被类目词"掩盖"的品牌词，用于降级时组合过滤（保护品牌不丢失）。
+# ============================================================
+# 统一结构化检索（多级降级链）
+# ============================================================
+def _structured_search(conn, tool_name: str, norm: Dict[str, Any]) -> tuple:
     """
-    if not text:
-        return []
-    toks = list(dict.fromkeys(
-        t.strip()
-        for t in jieba.cut(text)
-        if t.strip() and t not in _RECOMMEND_STOP
-        and len(t.strip()) >= 2 and not t.strip().isdigit()
-        and t.strip() not in _CATEGORY_WORDS_SET
-    ))
-    return sorted(toks, key=len, reverse=True)
+    多级降级检索商品（库存联表 / 价格），覆盖模型参数缺陷：
+
+      L0 SKU 精确（最高优先级）；
+      L1 归一化商品名 ILIKE + 过滤条件；
+      L2 仅品牌词；
+      L3 类目（category_small / category_path / category_big，支持只给类目不给关键词）；
+      L4 型号串；
+      全空返回 ([], 0)。
+
+    Returns:
+        (rows, matched_level)：matched_level ∈ {1:精确(L0/L1), 2:品牌, 3:类目, 4:型号, 0:未命中}。
+        降级命中的结果由调用方在文本中标注「近似匹配」，避免 LLM 误报为精确结果。
+
+    所有 SQL 均为参数化查询（product_repo / inventory_repo 内部实现）。
+    """
+    repo = inventory_repo if tool_name == "get_product_inventory" else product_repo
+    fn = repo.search_inventory if tool_name == "get_product_inventory" else repo.search_products
+
+    def _call(**overrides) -> List[Dict[str, Any]]:
+        return fn(
+            conn,
+            sku_code=norm.get("sku_code"),
+            product_name=overrides.get("product_name"),
+            category_big=overrides.get("category_big", norm.get("category_big")),
+            category_small=overrides.get("category_small", norm.get("category_small")),
+            category_path=overrides.get("category_path", norm.get("category_path")),
+            min_price=overrides.get("min_price", norm.get("min_price")),
+            max_price=overrides.get("max_price", norm.get("max_price")),
+            in_stock_only=overrides.get("in_stock_only", norm.get("in_stock_only", False)),
+        )
+
+    name = norm.get("product_name")
+
+    # L0：SKU 精确匹配（最高优先级，不依赖名称清洗）
+    if norm.get("sku_code"):
+        rows = _call(product_name=None)
+        if rows:
+            return rows, 1
+
+    # L1：归一化名称 + 全部过滤条件
+    if name:
+        rows = _call(product_name=name)
+        if rows:
+            return rows, 1
+
+    # L2：品牌词单独（保护品牌不因全称不匹配而丢失）
+    brand = params.extract_brand(name or "")
+    if brand and brand != name:
+        rows = _call(product_name=brand)
+        if rows:
+            return rows, 2
+
+    # L3：类目检索（名称为空 / 过泛时；category-only 场景的关键路径）
+    for key in ("category_small", "category_path", "category_big"):
+        if norm.get(key):
+            rows = _call(product_name=None, **{key: norm[key]})
+            if rows:
+                return rows, 3
+    # 名称含类目词时按层级过滤（大类→category_big，中类→category_path，小类→category_small）
+    if name:
+        for w in _CATEGORY_WORDS:
+            if w in name:
+                level_key, level_val = _CATEGORY_LEVEL[w]
+                rows = _call(product_name=None, **{level_key: level_val})
+                if rows:
+                    return rows, 3
+                # 该类目词 0 行时继续尝试名称中的其他类目词（如'智能手表 充电器'）
+                continue
+
+    # L4：型号串单独（'苹果iPhone 15' → 'iPhone 15'）
+    model = params.extract_model(name or "")
+    if model and model != name:
+        rows = _call(product_name=model)
+        if rows:
+            return rows, 4
+
+    return [], 0
 
 
 def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
@@ -182,43 +214,25 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
     """
     name = tool_call.get("name", "")
     arguments = tool_call.get("arguments") or {}
+    # 原始 query 兜底来源：intent 层已注入 product_name/query（用户原话），此处取其一
+    raw_query = (
+        str(arguments.get("query") or arguments.get("product_name") or "")
+        if isinstance(arguments, dict)
+        else ""
+    )
 
-    # ---- 结构化 SQL 检索 ----
-    if name == "get_product_inventory":
-        rows = inventory_repo.search_inventory(
-            conn,
-            sku_code=_arg(arguments, "sku_code"),
-            product_name=_arg(arguments, "product_name"),
-            category_big=_arg(arguments, "category_big"),
-            category_small=_arg(arguments, "category_small"),
-            category_path=_arg(arguments, "category_path"),
-            min_price=_num_arg(arguments, "min_price"),
-            max_price=_num_arg(arguments, "max_price"),
-            in_stock_only=_bool_arg(arguments, "in_stock_only"),
-        )
-        return {
-            "name": name,
-            "result": inventory_repo.format_inventory(rows),
-            "raw": rows,
-        }
-
-    if name == "get_product_price":
-        rows = product_repo.search_products(
-            conn,
-            sku_code=_arg(arguments, "sku_code"),
-            product_name=_arg(arguments, "product_name"),
-            category_big=_arg(arguments, "category_big"),
-            category_small=_arg(arguments, "category_small"),
-            category_path=_arg(arguments, "category_path"),
-            min_price=_num_arg(arguments, "min_price"),
-            max_price=_num_arg(arguments, "max_price"),
-            in_stock_only=_bool_arg(arguments, "in_stock_only"),
-        )
-        return {
-            "name": name,
-            "result": product_repo.format_products(rows),
-            "raw": rows,
-        }
+    # ---- 结构化 SQL 检索（参数先归一化，LLM 原始值不直通 SQL）----
+    if name in ("get_product_inventory", "get_product_price", "product_recommendation"):
+        norm = params.normalize_arguments(name, arguments, raw_query)
+        rows, level = _structured_search(conn, name, norm)
+        if name == "get_product_inventory":
+            result = inventory_repo.format_inventory(rows)
+        else:
+            result = product_repo.format_products(rows)
+        if rows and level >= 2:
+            # 降级命中（品牌/类目/型号近似）：明确标注，避免 LLM 误报为精确匹配
+            result = "⚠️ 未找到完全匹配的商品，以下为相关商品（近似匹配）：\n" + result
+        return {"name": name, "result": result, "raw": rows}
 
     # ---- RAG 向量检索 ----
     if name == "get_knowledge_base":
@@ -237,82 +251,6 @@ def execute_tool(conn, tool_call: Dict[str, Any]) -> Dict[str, Any]:
             "name": name,
             "result": kb_repo.format_kb(chunks),
             "raw": chunks,
-        }
-
-    if name == "product_recommendation":
-        # 结构化推荐：按商品关键词 + 类目/价格/库存分级过滤查商品表（精确命中规格信息）
-        keyword = _arg(arguments, "product_name") or _arg(arguments, "query") or ""
-        rows = product_repo.search_products(
-            conn,
-            sku_code=_arg(arguments, "sku_code"),
-            product_name=keyword,
-            category_big=_arg(arguments, "category_big"),
-            category_small=_arg(arguments, "category_small"),
-            category_path=_arg(arguments, "category_path"),
-            min_price=_num_arg(arguments, "min_price"),
-            max_price=_num_arg(arguments, "max_price"),
-            in_stock_only=_bool_arg(arguments, "in_stock_only"),
-        )
-        # 降级兜底：模型把整句塞进关键词导致空结果时，提取核心词重试。
-        # 关键：优先保护品牌/型号词（如 iphone），用「品牌词 + 类目词」组合过滤，
-        # 避免类目词覆盖后把品牌丢弃（"iphone手机"被偷换成泛"手机"）。
-        if not rows and keyword:
-            _mp = _num_arg(arguments, "min_price")
-            _xp = _num_arg(arguments, "max_price")
-            _st = _bool_arg(arguments, "in_stock_only")
-            cats = [w for w in _core_keywords(keyword) if w in _CATEGORY_WORDS_SET]
-            brands = _brand_words(keyword)
-
-            # 1) 品牌/型号词 + 类目过滤组合（最优先，如 iphone + 手机类目）
-            if brands:
-                for b in brands:
-                    for c in cats:
-                        rows = product_repo.search_products(
-                            conn, product_name=b, category_path=c,
-                            min_price=_mp, max_price=_xp, in_stock_only=_st,
-                        )
-                        if rows:
-                            break
-                    if rows:
-                        break
-            # 2) 类目词走类目过滤（小类精确/路径模糊）
-            if not rows:
-                for kw in cats:
-                    rows = product_repo.search_products(
-                        conn, category_small=kw,
-                        min_price=_mp, max_price=_xp, in_stock_only=_st,
-                    )
-                    if not rows:
-                        rows = product_repo.search_products(
-                            conn, category_path=kw,
-                            min_price=_mp, max_price=_xp, in_stock_only=_st,
-                        )
-                    if rows:
-                        break
-            # 3) 品牌/型号词单独名称匹配
-            if not rows:
-                for b in brands:
-                    rows = product_repo.search_products(
-                        conn, product_name=b,
-                        min_price=_mp, max_price=_xp, in_stock_only=_st,
-                    )
-                    if rows:
-                        break
-            # 4) 其余核心词名称匹配
-            if not rows:
-                for kw in _core_keywords(keyword):
-                    if kw in _CATEGORY_WORDS_SET:
-                        continue
-                    rows = product_repo.search_products(
-                        conn, product_name=kw,
-                        min_price=_mp, max_price=_xp, in_stock_only=_st,
-                    )
-                    if rows:
-                        break
-        return {
-            "name": name,
-            "result": product_repo.format_products(rows),
-            "raw": rows,
         }
 
     # ---- 未知工具 ----

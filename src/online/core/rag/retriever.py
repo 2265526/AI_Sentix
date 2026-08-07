@@ -3,7 +3,6 @@
 — 混合检索引擎（BM25 关键词 + 语义向量 双路召回）
 """
 import json
-import os
 import re
 import threading
 import time
@@ -12,23 +11,17 @@ from typing import Any, Dict, List, Optional
 
 import jieba
 import psycopg2.extras
-from dotenv import load_dotenv
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
-load_dotenv()
+from config.settings import settings
 
 # ------------------------------------------------------------
-# Embedding 配置（env 未配置时用默认值）
+# 召回参数默认值（可经 .env 调整，见 config/settings.py）
 # ------------------------------------------------------------
-EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
-EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "ollama")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
-
-# 召回参数默认值
-VECTOR_TOP_K = 30          # 向量路每路召回数（Rerank 前的候选池）
-BM25_TOP_K = 30            # BM25 路每路召回数
-MAX_QUERY_LEN = 512        # 查询文本截断长度（与 /rag/search 接口 query 上限一致）
+VECTOR_TOP_K = settings.vector_top_k   # 向量路每路召回数（Rerank 前的候选池）
+BM25_TOP_K = settings.bm25_top_k       # BM25 路每路召回数
+MAX_QUERY_LEN = settings.max_query_len  # 查询文本截断长度（与 /rag/search 接口 query 上限一致）
 
 # token 过滤：jieba 分词结果直接作为 token（中文词整体保留，不再二次拆字；
 # 英文数字词由 jieba 自行切分）。
@@ -47,20 +40,24 @@ STOPWORDS = frozenset(
 )
 
 
-# 复用 embedding 客户端（避免每次请求新建连接开销）
-_EMBEDDING_CLIENT = OpenAI(api_key=EMBEDDING_API_KEY, base_url=EMBEDDING_BASE_URL, timeout=5.0)
+# 复用 embedding 客户端（避免每次请求新建连接开销；配置统一取自 settings）
+_EMBEDDING_CLIENT = OpenAI(
+    api_key=settings.embedding_api_key,
+    base_url=settings.embedding_base_url,
+    timeout=settings.embedding_timeout,
+)
 
 
 def get_embedding(text: str) -> Optional[List[float]]:
     """
     调用本地 Ollama embedding 接口生成向量。
-    失败或超时（5s）时返回 None（调用方据此降级为纯 BM25 召回，保证服务可用）。
+    失败或超时时返回 None（调用方据此降级为纯 BM25 召回，保证服务可用）。
     """
     if not text or not text.strip():
         return None
     try:
         resp = _EMBEDDING_CLIENT.embeddings.create(
-            input=text[:MAX_QUERY_LEN], model=EMBEDDING_MODEL
+            input=text[:MAX_QUERY_LEN], model=settings.embedding_model
         )
         return resp.data[0].embedding
     except Exception:

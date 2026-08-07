@@ -24,6 +24,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from src.online.core.agent import params
 from src.online.core.agent.enricher import _find_brand
 from src.online.db.repositories import memory_repo
 
@@ -42,19 +43,6 @@ _SKU_RE = re.compile(r"SKU\s+([A-Za-z0-9]+)")
 
 # 工具返回文本中的价格：'¥6999.00' / '¥6999'
 _PRICE_IN_RAW_RE = re.compile(r"¥\s*([\d.]+)")
-
-# 关键词清洗：去掉句尾疑问/语气词，避免整句（如「华为Mate 60 Pro 还有货吗」）污染记忆
-_QUERY_TAIL_RE = re.compile(
-    r"(还有货吗|有没有货|有货吗|多少钱|多少钱一个|怎么卖|价格多少|怎么样|如何|在吗|"
-    r"请问|你好|谢谢|吗|呢|吧|啊|呀|哦|嘛|哈|哇|啦|的|了)+$"
-)
-
-
-def _clean_query_keyword(keyword: str) -> str:
-    """清洗关键词尾部的疑问/语气词（'华为Mate 60 Pro 还有货吗' → '华为Mate 60 Pro'）。"""
-    cleaned = _QUERY_TAIL_RE.sub("", keyword.strip())
-    cleaned = re.sub(r"[？?！!。，,、；;\s]+$", "", cleaned)
-    return cleaned
 
 # 快照中参与「防呆全空判断」的实体键
 _ENTITY_KEYS = (
@@ -154,15 +142,26 @@ def extract_entities(
         snapshot["last_mentioned_sku"] = str(args["sku_code"])
         conf["sku"] = 1.0
 
-    # 价格区间：优先工具参数
+    # 价格区间：优先工具参数（数值直接取；模型给的字符串走文本解析，min/max 分别解析防拼接错误）
     min_price = args.get("min_price")
     max_price = args.get("max_price")
     if min_price is not None or max_price is not None:
-        snapshot["last_price_range"] = [
-            float(min_price) if min_price is not None else None,
-            float(max_price) if max_price is not None else None,
-        ]
-        conf["price_range"] = 1.0
+        lo = hi = None
+        if isinstance(min_price, (int, float)):
+            lo = float(min_price)
+        elif isinstance(min_price, str):
+            lo, hi_tmp = params.parse_price_text(min_price)
+            if hi_tmp is not None:
+                hi = hi_tmp
+        if isinstance(max_price, (int, float)):
+            hi = float(max_price)
+        elif isinstance(max_price, str):
+            _, hi_tmp = params.parse_price_text(max_price)
+            if hi_tmp is not None:
+                hi = hi_tmp
+        if lo is not None or hi is not None:
+            snapshot["last_price_range"] = [lo, hi]
+            conf["price_range"] = 1.0
 
     # 优先级①：工具返回原始数据补充 SKU / 价格（缺失时才回填）
     for tr in tool_results or []:
@@ -191,21 +190,17 @@ def extract_entities(
             snapshot["last_price_range"] = price_from_query
             conf["price_range"] = 0.7
 
-    # 检索核心词（增强前原词优先，参数 product_name 次之，品牌/品类/价格信息兜底）
-    keyword = args.get("product_name") or None
+    # 检索核心词（参数 product_name 优先，统一用 params 清洗——含意图词/疑问词的整句不会原样入库）
+    keyword = params.clean_product_name(args.get("product_name"))
     if not keyword:
-        # 兜底：仅当问题含可检索信息（品牌/品类/价格）时才记录，纯寒暄不污染记忆
+        # 兜底：品牌 / 品类 / 价格信息（纯寒暄不污染记忆）
         if snapshot["last_brand"]:
             keyword = snapshot["last_brand"]
         else:
             low = query.lower()
-            from src.online.core.agent.enricher import CATEGORY_WORDS  # 局部导入避免循环
-
-            has_category = any(w.lower() in low for w in CATEGORY_WORDS)
+            has_category = any(w.lower() in low for w in params.CATEGORY_WORDS)
             if has_category or snapshot.get("last_price_range"):
-                keyword = query.strip()[:64]
-    if keyword:
-        keyword = _clean_query_keyword(str(keyword))
+                keyword = params.clean_product_name(query)
     if keyword:
         snapshot["last_query_keyword"] = keyword[:64]
         conf["keyword"] = 0.8 if keyword == snapshot["last_brand"] else 0.9

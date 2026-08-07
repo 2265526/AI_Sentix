@@ -16,10 +16,12 @@ import logging
 import re
 from typing import Optional
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
-# 默认中文音色（可在调用时覆盖）
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+# 默认中文音色（可经环境变量 TTS_VOICE 调整，或在调用时覆盖）
+DEFAULT_VOICE = settings.tts_voice
 
 # 音色参考（edge-tts 支持的其他中文音色）
 VOICES = {

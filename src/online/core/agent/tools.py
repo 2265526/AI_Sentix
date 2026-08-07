@@ -29,7 +29,9 @@ TOOLS: List[Dict[str, Any]] = [
             "description": "查询商品库存数量与物流时效（预计送达天数、仓库位置）。"
                            "用户询问'有货吗''库存''几天能到''哪个仓'时使用。"
                            "可按 SKU 精确查询、按商品名称模糊查询，"
-                           "也可按大类/小类/类目路径分级过滤，或用价格区间、有货状态进一步筛选。",
+                           "也可按大类/小类/类目路径分级过滤，或用价格区间、有货状态进一步筛选。"
+                           "注意：product_name 只填商品核心名称（品牌/型号/品类），"
+                           "不得包含疑问词或整句提问（如'苹果iPhone 15有现货吗'应填 'iPhone 15'）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -39,7 +41,8 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                     "product_name": {
                         "type": "string",
-                        "description": "商品名称关键词，模糊匹配（如：连衣裙、手机壳）",
+                        "description": "商品名称核心词（品牌/型号/品类），模糊匹配（如：iPhone 15、连衣裙、手机壳）。"
+                                        "禁止填整句提问，不得含'有货吗''多少钱''推荐'等意图词",
                     },
                     "category_big": {
                         "type": "string",
@@ -86,7 +89,8 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                     "product_name": {
                         "type": "string",
-                        "description": "商品名称关键词，模糊匹配",
+                        "description": "商品名称核心词（品牌/型号/品类），模糊匹配。"
+                                        "禁止填整句提问，不得含'多少钱''价格''有货'等意图词",
                     },
                     "category_big": {
                         "type": "string",

@@ -7,43 +7,25 @@ core/llm/client.py —— LLM 统一调用（DeepSeek）
   - 二次模型回调：把检索结果与用户问题再次交给 LLM，生成（流式）回复
 
 技术选型（文档未细化的部分）：
-  - 使用 openai SDK 对接 DeepSeek（OpenAI 兼容 API），base_url 与密钥取自 .env：
-        DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL（默认 deepseek-chat）
+  - 使用 openai SDK 对接 DeepSeek（OpenAI 兼容 API），密钥、base_url、模型名等
+    配置统一在 config/settings.py（DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL /
+    DEEPSEEK_MODEL，默认 deepseek-chat），本模块不再直接读取环境变量；
   - 提供三类能力：
         chat()            非流式补全（测试/内部用）
         chat_stream()     流式补全（SSE 逐字下发，供 /v1/chat/text）
         function_call()   工具调用（意图识别），返回解析后的 tool_calls
-  - 超时：连接 10s / 读取 60s，避免请求挂死；
-    调用失败抛 LLMError，由上层 chat_service 做兜底。
+  - 超时：统一取 settings.deepseek_timeout，避免请求挂死；
+    调用失败抛 LLMError（定义于 src/common/exceptions.py），由上层 chat_service 做兜底。
 """
 import json
-import os
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
+from config.settings import settings
+from src.common.exceptions import LLMError
 from src.online.core.agent.tools import _TOOL_NAME_RE, normalize_tool_name
-
-load_dotenv()
-
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-# 意图识别用系统提示词：告诉模型什么时候调用工具、如何填参数
-INTENT_SYSTEM_PROMPT = """你是电商AI客服的意图识别器。根据用户问题判断需要调用哪个工具获取信息，严格按工具 schema 填参。
-规则：
-1. 用户询问商品价格、库存、物流时效 → 调用价格/库存工具；
-2. 用户询问售后政策、使用说明、常见问题、主观建议 → 调用知识库工具；
-3. 用户请求推荐商品 → 调用推荐工具；
-4. 寒暄、评价、无法归类的普通对话 → 不调用任何工具，直接由客服回答。
-一次只能调用一个最合适的工具。参数缺失时用 null，不要编造。"""
-
-
-class LLMError(Exception):
-    """LLM 调用异常（超时/网络/API 错误）。"""
 
 
 class LLMClient:
@@ -54,15 +36,16 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: Optional[float] = None,
     ):
-        if not (api_key or DEEPSEEK_API_KEY):
+        api_key = api_key or settings.deepseek_api_key
+        if not api_key:
             raise LLMError("未配置 DEEPSEEK_API_KEY，请在 .env 中设置")
-        self.model = model or DEEPSEEK_MODEL
+        self.model = model or settings.deepseek_model
         self._client = OpenAI(
-            api_key=api_key or DEEPSEEK_API_KEY,
-            base_url=base_url or DEEPSEEK_BASE_URL,
-            timeout=timeout,
+            api_key=api_key,
+            base_url=base_url or settings.deepseek_base_url,
+            timeout=timeout or settings.deepseek_timeout,
         )
 
     # --------------------------------------------------------
