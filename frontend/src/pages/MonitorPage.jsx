@@ -15,6 +15,7 @@ import {
   Table,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -106,6 +107,12 @@ export default function MonitorPage() {
     { title: '工具', dataIndex: 'tools_used', width: 190,
       render: (v) => (v || []).join(', ') || <Text type="secondary">无</Text> },
     { title: '命中', dataIndex: 'hits', width: 60 },
+    { title: 'Tokens', dataIndex: 'total_tokens', width: 90,
+      render: (v, r) => (v || (r.prompt_tokens ?? 0) + (r.completion_tokens ?? 0)) > 0
+        ? <Tooltip title={`输入 ${r.prompt_tokens ?? 0} / 输出 ${r.completion_tokens ?? 0}`}>
+            <Text>{v ?? (r.prompt_tokens ?? 0) + (r.completion_tokens ?? 0)}</Text>
+          </Tooltip>
+        : <Text type="secondary">—</Text> },
     { title: '降级', dataIndex: 'degraded', width: 64,
       render: (v) => v ? <Tag color="orange">降级</Tag> : null },
     { title: '兜底', dataIndex: 'fallback', width: 64,
@@ -200,6 +207,14 @@ export default function MonitorPage() {
                   {detail.tools_used?.length > 0
                     ? `实际执行：${detail.tools_used.join(', ')}${detail.fallback ? '（决策兜底触发）' : ''}`
                     : '决策兜底/容错后真正执行的工具'}
+                </div>
+              </Descriptions.Item>
+              <Descriptions.Item label="Token 消耗">
+                <Tag>输入 {detail.prompt_tokens ?? 0}</Tag>
+                <Tag>输出 {detail.completion_tokens ?? 0}</Tag>
+                <Tag color="geekblue">合计 {detail.total_tokens ?? 0}</Tag>
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                  意图识别 + 二次回调两段 LLM 调用合计
                 </div>
               </Descriptions.Item>
             </Descriptions>
