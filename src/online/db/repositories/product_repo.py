@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2.extras
 
-from src.common.utils import like_pattern
+from src.common.utils import like_pattern, relevance_order
 
 _MAX_RESULTS = 10
 
@@ -120,6 +120,8 @@ def search_products(
     if not clauses:
         # 无任何过滤条件：不返回数据，避免全表扫描
         return []
+    # 相关性排序（P1-7）：名称关键词存在时 精确 > 前缀 > 包含 > id
+    order_frag, sort_params = relevance_order(product_name)
 
     sql = f"""
         SELECT p.id, p.sku_code, p.product_name,
@@ -128,11 +130,11 @@ def search_products(
         FROM product_catalog p
         LEFT JOIN inventory_logistics i ON i.product_id = p.id
         WHERE {' AND '.join(clauses)}
-        ORDER BY p.id
+        ORDER BY {order_frag}
         LIMIT %s
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, params + [limit])
+        cur.execute(sql, params + sort_params + [limit])
         rows = cur.fetchall()
     return [
         {
