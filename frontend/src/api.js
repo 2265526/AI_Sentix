@@ -19,6 +19,29 @@ export async function getMonitorRequest(requestId) {
   return data
 }
 
+// 导出监控日志：触发浏览器下载附件（csv / json / txt），返回下载文件名
+export async function exportMonitorLog({ status = 'all', format = 'csv' } = {}) {
+  const resp = await fetch(`/v1/monitor/export?status=${status}&format=${format}`, { method: 'GET' })
+  if (!resp.ok) {
+    let detail = resp.statusText
+    try { detail = (await resp.json()).detail || detail } catch (e) { /* ignore */ }
+    throw new Error(detail)
+  }
+  const blob = await resp.blob()
+  const cd = resp.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="([^"]+)"/)
+  const filename = m ? m[1] : `monitor_log.${format}`
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+  return filename
+}
+
 // ---------- 聊天 /v1/chat/text ----------
 export async function chatText(message, history = [], stream = false, sessionId) {
   const { data } = await http.post('/v1/chat/text', { message, history, stream, session_id: sessionId })
@@ -100,6 +123,22 @@ export async function importProducts(file) {
   const fd = new FormData()
   fd.append('file', file)
   const { data } = await http.post('/admin/products/import', fd)
+  return data
+}
+
+// ---------- 类目管理 /admin/categories（V2.2.3）----------
+export async function getCategories() {
+  const { data } = await http.get('/admin/categories')
+  return data
+}
+
+export async function searchCategories(q) {
+  const { data } = await http.get('/admin/categories/search', { params: { q } })
+  return data
+}
+
+export async function createCategory(payload) {
+  const { data } = await http.post('/admin/categories', payload)
   return data
 }
 
