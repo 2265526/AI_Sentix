@@ -4,17 +4,17 @@ import axios from 'axios'
 const http = axios.create({ timeout: 120000 })
 
 // ---------- 聊天 /v1/chat/text ----------
-export async function chatText(message, history = [], stream = false) {
-  const { data } = await http.post('/v1/chat/text', { message, history, stream })
+export async function chatText(message, history = [], stream = false, sessionId) {
+  const { data } = await http.post('/v1/chat/text', { message, history, stream, session_id: sessionId })
   return data
 }
 
-// 流式聊天（SSE）：onMeta / onToken / onDone 回调
-export async function chatTextStream(message, history = [], { onMeta, onToken, onDone }) {
+// 流式聊天（SSE）：sessionId 会话标识（短期记忆）；onMeta / onToken / onDone 回调
+export async function chatTextStream(message, history = [], sessionId, { onMeta, onToken, onDone }) {
   const resp = await fetch('/v1/chat/text', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history, stream: true }),
+    body: JSON.stringify({ message, history, stream: true, session_id: sessionId }),
   })
   if (!resp.ok || !resp.body) throw new Error(`聊天接口错误 ${resp.status}`)
   const reader = resp.body.getReader()
@@ -42,11 +42,13 @@ export async function chatTextStream(message, history = [], { onMeta, onToken, o
 }
 
 // ---------- 阶段四：语音对话 /v1/chat/audio ----------
-// 录音上传 → 返回 mp3 音频 Blob；识别文本/回复从响应头取（URL 编码）
-export async function chatAudio(file, history = []) {
+// 录音上传 → 返回 mp3 音频 Blob；识别文本/回复从响应头取（URL 编码）；
+// sessionId 会话标识（短期记忆）；x-context-expired 表示后端会话过期
+export async function chatAudio(file, history = [], sessionId) {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('history', JSON.stringify(history))
+  fd.append('session_id', sessionId)
   const resp = await fetch('/v1/chat/audio', { method: 'POST', body: fd })
   if (!resp.ok) {
     let detail = resp.statusText
@@ -59,6 +61,7 @@ export async function chatAudio(file, history = []) {
     transcript: decodeURIComponent(resp.headers.get('x-transcript') || ''),
     reply: decodeURIComponent(resp.headers.get('x-reply') || ''),
     intent: decodeURIComponent(resp.headers.get('x-intent') || ''),
+    contextReset: resp.headers.get('x-context-expired') === 'true',
   }
 }
 
