@@ -6,9 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-# 允许的文档类型（与 kb_documents.doc_type 数据一致，None 表示不过滤）
-ALLOWED_DOC_TYPES = ("product_manual", "faq", "policy")
-
 
 class RAGSearchRequest(BaseModel):
     """/rag/search 请求体。"""
@@ -76,6 +73,10 @@ class ChatRequest(BaseModel):
         default_factory=list, max_length=20, description="多轮历史（最近 10 条生效）"
     )
     stream: bool = Field(True, description="是否流式返回（SSE）")
+    session_id: Optional[str] = Field(
+        None, max_length=64,
+        description="会话标识（短期记忆载体，白名单 ^[A-Za-z0-9-]{1,64}$；空则服务端生成）",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -84,3 +85,8 @@ class ChatResponse(BaseModel):
     reply: str = Field(..., description="客服回复")
     intent: Optional[str] = Field(None, description="识别到的意图工具名（无则 None）")
     tools_used: List[str] = Field(default_factory=list, description="实际执行的工具列表")
+    context_reset: bool = Field(
+        False, description="会话过期/首次访问信号：为 True 时前端应清空本地历史"
+    )
+    original_query: Optional[str] = Field(None, description="原始用户问题（问题增强前）")
+    enriched_query: Optional[str] = Field(None, description="增强后问题（无增强时等于原始问题）")
