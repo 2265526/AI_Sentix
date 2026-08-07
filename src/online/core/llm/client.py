@@ -49,10 +49,27 @@ class LLMClient:
         )
         # 最近一次 function_call 的原始响应（content / tool_calls 摘要），供监控排查
         self._last_function_call_raw = ""
+        # 最近一次 LLM 调用的 token 消耗（usage），供监控统计
+        self._last_usage: Dict[str, int] = {}
 
     def get_last_function_call_raw(self, limit: int = 300) -> str:
         """最近一次 function_call 的原始响应文本（截断），供监控时间线展示。"""
         return (self._last_function_call_raw or "")[:limit]
+
+    @staticmethod
+    def _usage_dict(usage) -> Dict[str, int]:
+        """把 OpenAI 响应的 usage 对象归一化为 dict（缺失字段补 0）。"""
+        if usage is None:
+            return {}
+        return {
+            "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        }
+
+    def get_last_usage(self) -> Dict[str, int]:
+        """最近一次 LLM 调用（chat / chat_stream / function_call）的 token 消耗。"""
+        return dict(self._last_usage)
 
     # --------------------------------------------------------
     # 非流式补全
@@ -64,6 +81,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
     ) -> str:
         """非流式补全，返回完整回复文本。"""
+        self._last_usage = {}
         try:
             resp = self._client.chat.completions.create(
                 model=self.model,
@@ -74,6 +92,7 @@ class LLMClient:
             )
             if not resp.choices:
                 raise LLMError("LLM 响应为空（choices 为空）")
+            self._last_usage = self._usage_dict(getattr(resp, "usage", None))
             return (resp.choices[0].message.content or "").strip()
         except Exception as e:
             raise LLMError(f"LLM 非流式调用失败: {e}") from e
@@ -88,6 +107,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
         """流式补全，逐段 yield 文本增量（不含 tool_calls 内容）。"""
+        self._last_usage = {}
         try:
             stream = self._client.chat.completions.create(
                 model=self.model,
@@ -95,8 +115,12 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                stream_options={"include_usage": True},  # 流式末尾 chunk 返回 usage
             )
             for chunk in stream:
+                # 流式 usage 只在最后一个 chunk（choices 为空、usage 非空）出现
+                if getattr(chunk, "usage", None) is not None:
+                    self._last_usage = self._usage_dict(chunk.usage)
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -138,6 +162,7 @@ class LLMClient:
         except Exception as e:
             raise LLMError(f"LLM 意图识别失败: {e}") from e
 
+        self._last_usage = self._usage_dict(getattr(resp, "usage", None))
         if not resp.choices:
             self._last_function_call_raw = ""  # 空响应
             return []  # 空响应视为"无工具调用"
