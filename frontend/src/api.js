@@ -3,6 +3,22 @@ import axios from 'axios'
 
 const http = axios.create({ timeout: 120000 })
 
+// ---------- 监控 /v1/monitor（V2.2.2）----------
+export async function getMonitorSummary() {
+  const { data } = await http.get('/v1/monitor/summary')
+  return data
+}
+
+export async function getMonitorRequests(params = {}) {
+  const { data } = await http.get('/v1/monitor/requests', { params })
+  return data
+}
+
+export async function getMonitorRequest(requestId) {
+  const { data } = await http.get(`/v1/monitor/requests/${requestId}`)
+  return data
+}
+
 // ---------- 聊天 /v1/chat/text ----------
 export async function chatText(message, history = [], stream = false, sessionId) {
   const { data } = await http.post('/v1/chat/text', { message, history, stream, session_id: sessionId })
