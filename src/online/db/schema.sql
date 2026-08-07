@@ -151,3 +151,101 @@ COMMENT ON COLUMN kb_chunks.chunk_text   IS '分块后的纯文本内容（用�
 COMMENT ON COLUMN kb_chunks.chunk_vector IS '文本向量（1024维），支持余弦距离（<=>）、内积（<#>）、L2距离（<->）等向量运算';
 COMMENT ON COLUMN kb_chunks.meta_data    IS '元数据标签，用于 Rerank 阶段过滤，标准格式见《数据库设计手册》5. 数据字典';
 COMMENT ON COLUMN kb_chunks.created_at   IS '记录创建时间';
+
+-- ============================================================
+-- V2.2.0 短期/长期记忆（会话上下文 + 用户画像 + 交互日志）
+-- ============================================================
+
+-- 5.1 会话上下文表（短期记忆：会话维度 JSONB 快照，30 分钟过期）
+DROP TABLE IF EXISTS session_context CASCADE;
+CREATE TABLE session_context (
+    session_id     VARCHAR(64) PRIMARY KEY,
+    user_id        VARCHAR(64),
+    context        JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    turn_count     INT         NOT NULL DEFAULT 0,
+    expires_at     TIMESTAMP   NOT NULL,
+    last_active_at TIMESTAMP   DEFAULT NOW(),
+    created_at     TIMESTAMP   DEFAULT NOW()
+);
+
+-- 过期清理 / 按用户查询 / 上下文 GIN 索引
+CREATE INDEX idx_session_context_expires ON session_context (expires_at);
+CREATE INDEX idx_session_context_user ON session_context (user_id, last_active_at);
+CREATE INDEX idx_session_context_ctx ON session_context USING GIN (context);
+
+-- 5.2 用户长期画像表（预留：长期记忆，后续由画像任务回填）
+DROP TABLE IF EXISTS user_long_term_profile CASCADE;
+CREATE TABLE user_long_term_profile (
+    user_id              VARCHAR(64) PRIMARY KEY,
+    preferred_brands     TEXT[],
+    preferred_categories TEXT[],
+    price_sensitivity    VARCHAR(20) CHECK (price_sensitivity IN ('low','medium','high')),
+    price_stats          JSONB,
+    frequent_skus        TEXT[],
+    summary              TEXT,
+    profile_embedding    VECTOR(1024),
+    total_interactions   INT         NOT NULL DEFAULT 0,
+    last_active_at       TIMESTAMP,
+    created_at           TIMESTAMP   DEFAULT NOW(),
+    updated_at           TIMESTAMP   DEFAULT NOW()
+);
+
+CREATE INDEX idx_profile_brands ON user_long_term_profile USING GIN (preferred_brands);
+CREATE INDEX idx_profile_categories ON user_long_term_profile USING GIN (preferred_categories);
+CREATE INDEX idx_profile_embedding ON user_long_term_profile
+    USING hnsw (profile_embedding vector_cosine_ops);
+CREATE INDEX idx_profile_last_active ON user_long_term_profile (last_active_at);
+
+-- 5.3 用户交互日志表（预留：P0 起写入，供画像统计）
+DROP TABLE IF EXISTS user_interaction_log CASCADE;
+CREATE TABLE user_interaction_log (
+    id             BIGSERIAL PRIMARY KEY,
+    user_id        VARCHAR(64),
+    session_id     VARCHAR(64),
+    query          TEXT,
+    enhanced_query TEXT,
+    tool_called    VARCHAR(50),
+    result_count   INT,
+    entities       JSONB,
+    created_at     TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_interaction_user_time ON user_interaction_log (user_id, created_at DESC);
+CREATE INDEX idx_interaction_tool ON user_interaction_log (tool_called);
+
+-- 字段注释（与《数据库设计手册》「注释说明」列一致）
+COMMENT ON COLUMN session_context.session_id     IS '会话ID（VARCHAR(64)，主键）';
+COMMENT ON COLUMN session_context.user_id        IS '用户ID（可空，未登录场景为空；预留不设外键）';
+COMMENT ON COLUMN session_context.context        IS '上下文快照（JSONB）';
+COMMENT ON COLUMN session_context.turn_count     IS '累计对话轮数，超过10触发自动清空';
+COMMENT ON COLUMN session_context.expires_at     IS '过期时间=last_active_at+30分钟';
+COMMENT ON COLUMN session_context.last_active_at IS '最后活跃时间（每次对话自动刷新）';
+COMMENT ON COLUMN session_context.created_at     IS '记录创建时间';
+
+COMMENT ON COLUMN user_long_term_profile.user_id              IS '用户ID（主键；预留，不设外键松耦合）';
+COMMENT ON COLUMN user_long_term_profile.preferred_brands     IS '偏好品牌（TEXT[]，如 {iPhone,华为}）';
+COMMENT ON COLUMN user_long_term_profile.preferred_categories IS '偏好类目（TEXT[]）';
+COMMENT ON COLUMN user_long_term_profile.price_sensitivity    IS '价格敏感度（low/medium/high）';
+COMMENT ON COLUMN user_long_term_profile.price_stats          IS '价格统计信息（JSONB，如 {avg,min,max,samples}）';
+COMMENT ON COLUMN user_long_term_profile.frequent_skus        IS '高频商品SKU（TEXT[]）';
+COMMENT ON COLUMN user_long_term_profile.summary              IS '用户画像摘要（文本，LLM 生成）';
+COMMENT ON COLUMN user_long_term_profile.profile_embedding    IS '画像向量（1024维，须与kb_chunks同模型）';
+COMMENT ON COLUMN user_long_term_profile.total_interactions   IS '累计交互次数';
+COMMENT ON COLUMN user_long_term_profile.last_active_at       IS '最后活跃时间';
+COMMENT ON COLUMN user_long_term_profile.created_at           IS '记录创建时间';
+COMMENT ON COLUMN user_long_term_profile.updated_at           IS '记录更新时间（聚合/抽取时刷新）';
+
+COMMENT ON COLUMN user_interaction_log.id             IS '主键ID（自增）';
+COMMENT ON COLUMN user_interaction_log.user_id        IS '用户ID（未登录时与 session_id 相同）';
+COMMENT ON COLUMN user_interaction_log.session_id     IS '会话ID（关联 session_context.session_id）';
+COMMENT ON COLUMN user_interaction_log.query          IS '用户原始问题';
+COMMENT ON COLUMN user_interaction_log.enhanced_query IS '增强后的问题（无增强时为原句）';
+COMMENT ON COLUMN user_interaction_log.tool_called    IS '调用的工具名（无工具调用为 NULL）';
+COMMENT ON COLUMN user_interaction_log.result_count   IS '工具返回结果条数';
+COMMENT ON COLUMN user_interaction_log.entities       IS '抽取的实体快照（JSONB）';
+COMMENT ON COLUMN user_interaction_log.created_at     IS '记录创建时间';
+
+-- 过期会话自动清理（pg_cron，每小时执行一次；pg_cron 为 PostgreSQL 官方扩展，未安装时可改用
+-- memory_repo.delete_expired() 手动清理）
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT cron.schedule('cleanup_session_context','0 * * * *', $$DELETE FROM session_context WHERE expires_at < NOW()$$);
