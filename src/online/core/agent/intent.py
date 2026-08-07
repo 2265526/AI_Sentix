@@ -40,6 +40,8 @@ class IntentResult:
     error: Optional[str] = None
     # 预分类意图标签（规则分类器输出，供 trace / 链路观测）
     intent: Optional[str] = None
+    # LLM function calling 的原始响应摘要（供监控排查：模型为何没调用工具）
+    raw_response: str = ""
 
     @property
     def has_tool_call(self) -> bool:
@@ -143,6 +145,13 @@ def detect_intent(
     except LLMError as e:
         return IntentResult(query=query, error=str(e), intent=intent_tag)
 
+    # 原始响应摘要（LLMClient 记录；桩 LLM 无此方法时忽略）
+    raw_response = ""
+    try:
+        raw_response = getattr(llm, "get_last_function_call_raw", lambda: "")()
+    except Exception:
+        pass
+
     # 容错：
     #  - 工具名不在 schema 中（或别名无法归一化）时忽略该调用；
     #  - arguments 非 dict（如未解析的 JSON 字符串）时保留为 {"_raw": ...}；
@@ -162,4 +171,4 @@ def detect_intent(
         tc["name"] = name
         tc["arguments"] = args
         valid.append(tc)
-    return IntentResult(query=query, tool_calls=valid, intent=intent_tag)
+    return IntentResult(query=query, tool_calls=valid, intent=intent_tag, raw_response=raw_response)
