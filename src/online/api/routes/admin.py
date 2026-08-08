@@ -1,16 +1,9 @@
-# -*- coding: utf-8 -*-
 """
-api/routes/admin.py —— 管理员接口（前端管理页使用，无需登录）
-==============================================================
-1. POST /admin/kb/upload     知识库文档上传（TXT / PDF）
-     - 解析文本 → RecursiveCharacterTextSplitter 分块
-     - Ollama embedding 向量化 → 写入 kb_documents / kb_chunks（幂等重导）
-     - 上传成功后重建在线进程的 BM25 索引（否则新知识在 BM25 路检索不到）
-2. POST /admin/products/import  商品数据同步（CSV 导入）
-     - pandas 解析 CSV → product_catalog / inventory_logistics 增量入库（ON CONFLICT 更新）
-     - 说明：本接口做结构化数据同步；若需按商品说明书生成知识库向量，
-       仍使用离线脚本 src/offline/etl/shopee_importer.py
-3. 类目管理（V2.2.3）
+管理员接口
+
+1. POST /admin/kb/upload     知识库文档上传（TXT / PDF）：解析 → 分块 → 向量化 → 入库（幂等），并重建在线 BM25 索引
+2. POST /admin/products/import  商品数据同步（CSV 导入）：product_catalog / inventory_logistics 增量入库（ON CONFLICT 更新）
+3. 类目管理：
      - GET  /admin/categories          类目树（大类/中类/小类 三级）
      - GET  /admin/categories/search   类目搜索（名称/路径模糊匹配）
      - POST /admin/categories          新增类目（层级 + 父级校验，自动拼 path）
@@ -39,15 +32,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# 支持的文档类型（统一见 src/common/constants.py）
+# 支持的文档类型
 ALLOWED_TEXT_EXT = (".txt", ".md")
 ALLOWED_PDF_EXT = (".pdf")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
 
 
-# ============================================================
 # 类目管理（category 表，三级树）
-# ============================================================
 class CategoryCreate(BaseModel):
     """新增类目请求体。level: 1=大类 2=中类 3=小类。"""
 
@@ -187,9 +178,7 @@ def create_category(
     return {"status": "ok", "id": new_id, "name": body.name.strip(), "level": body.level, "path": path, "created_at": created_at}
 
 
-# ============================================================
 # 知识库文档上传
-# ============================================================
 def _extract_text(filename: str, content: bytes) -> str:
     """按扩展名提取纯文本：TXT/MD 直接解码，PDF 用 pypdf 逐页提取。"""
     ext = os.path.splitext(filename)[1].lower()
@@ -221,8 +210,7 @@ def _import_text_to_kb(
     """把整段文本分块、向量化并入库（幂等：同 source_url 先删旧数据）。
 
     Args:
-        meta_extra: 附加到 meta_data 的字段（如 product_skus、类目字段，
-                    对应《数据库设计手册》5. 数据字典标准结构）
+        meta_extra: 附加到 meta_data 的字段（如 product_skus、类目字段）
 
     Returns: (文档数, 分块数)
     """
@@ -232,7 +220,6 @@ def _import_text_to_kb(
         (doc_type, source_url),
     )
 
-    # 插入原始文档
     cur.execute(
         "INSERT INTO kb_documents (doc_type, source_url, raw_content) VALUES (%s, %s, %s) RETURNING id",
         (doc_type, source_url, raw_content),
@@ -301,9 +288,7 @@ def upload_kb_document(
     }
 
 
-# ============================================================
 # 商品数据同步（CSV 导入）
-# ============================================================
 def _parse_csv(content: bytes) -> List[dict]:
     """
     解析 CSV（自动探测常见编码），返回规范化后的行字典。
@@ -354,7 +339,7 @@ def import_products_csv(
 ):
     """
     CSV 导入商品与库存数据（ON CONFLICT 增量更新），
-    并同步为每个商品生成知识库文档（doc_type=product_manual，中文内容直接入库，不做翻译）：
+    并同步为每个商品生成知识库文档（doc_type=product_manual）：
     商品名 + 描述 → 分块 → embedding 向量化 → kb_documents / kb_chunks（幂等覆盖）。
     """
     content = file.file.read()
@@ -402,7 +387,7 @@ def import_products_csv(
                     (product_id, row["stock_quantity"], "默认仓", 3),
                 )
 
-                # 同步生成商品知识库文档（商品名 + 描述，中文直接入库，不翻译）
+                # 同步生成商品知识库文档（商品名 + 描述）
                 desc = (row["raw_description"] or "").strip()
                 kb_content = row["product_name"] + (f"\n\n{desc}" if desc else "")
                 if kb_content.strip():

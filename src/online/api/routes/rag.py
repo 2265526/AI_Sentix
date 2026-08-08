@@ -1,13 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-检索接口
-  支持输入 Query 返回最相关的 Top-5 知识片段"
-
-调用链：POST /rag/search
-  RAGSearchRequest
-    → HybridRetriever.search()   （BM25 + 向量双路召回）
-    → Reranker.rerank()          （综合得分、阈值 0.4、Top-5）
-    → RAGSearchResponse
+/rag 检索接口：支持输入 Query 返回最相关的 Top-K 知识片段。
 """
 import logging
 

@@ -1,9 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-api/routes/chat.py —— /v1/chat/text 对话接口
-=============================================
-对应《开发文档》阶段三产出物：
-  "Agent 核心服务，支持文本输入、流式输出"
+对话接口
 
 - 默认流式：SSE（text/event-stream），事件为 JSON：
       {"type":"meta","intent":...,"tools_used":[...]}
@@ -13,6 +9,7 @@ api/routes/chat.py —— /v1/chat/text 对话接口
 """
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -89,9 +86,7 @@ def chat_text(
     )
 
 
-# ============================================================
-# 阶段四：多模态语音链路（音频 → ASR → LLM → TTS → 音频）
-# ============================================================
+# 多模态语音链路（音频 → ASR → LLM → TTS → 音频）
 @router.post("/audio", summary="语音对话（音频→ASR→LLM→TTS→mp3 音频）")
 def chat_audio(
     file: UploadFile = File(..., description="录音文件（wav/mp3/ogg/webm，≤20MB）"),
@@ -100,11 +95,10 @@ def chat_audio(
     conn: connection = Depends(get_db),
 ):
     """
-    阶段四产物：POST /v1/chat/audio。
     链路：录音（前端 MediaRecorder）→ 本地 ASR（faster-whisper）→
           Agent 文本对话（ChatService）→ TTS（edge-tts）→ 返回 mp3 音频。
     识别文本与客服回复通过响应头 X-Transcript / X-Reply 返回（URL 编码），
-    便于前端同时展示文字。首次请求会加载 Whisper 模型（约 30~60s），之后秒级。
+    便于前端同时展示文字。首次请求会加载 Whisper 模型。
     """
     audio_bytes = file.file.read()
     if not audio_bytes:
@@ -112,7 +106,7 @@ def chat_audio(
     if len(audio_bytes) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="音频超过 20MB 限制")
 
-    # 调试：配置 AUDIO_DEBUG_DIR（见 config/settings.py）后保存每次上传的原始音频，便于排查识别为空的录音
+    # 调试：配置 AUDIO_DEBUG_DIR后保存每次上传的原始音频，便于排查识别为空的录音
     debug_dir = settings.audio_debug_dir
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)

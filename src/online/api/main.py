@@ -1,8 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-api/main.py —— FastAPI 应用入口
-=================================
-阶段二：RAG 检索服务；阶段三：Agent 对话；阶段四：管理员接口（前端验证用）。
+FastAPI 应用入口
 
 启动方式：
     uvicorn src.online.api.main:app --host 0.0.0.0 --port 8000
@@ -21,7 +18,6 @@ setup_logging()
 app = FastAPI(
     title="电商AI智能客服",
     description="阶段二：混合检索与重排序；阶段三：Agent 意图识别与工具路由；管理接口：知识库上传 / 商品同步",
-    version="0.4.0",
 )
 
 # CORS：允许前端（Vite dev server / 静态构建）跨域调用
