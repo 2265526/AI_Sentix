@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// 前端开发服务器：把 /v1、/rag、/admin 代理到后端 FastAPI
+// 前端开发服务器
 // 后端默认端口 8000；如需修改，同步修改这里与后端启动命令
 export default defineConfig({
   plugins: [react()],
