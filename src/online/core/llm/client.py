@@ -1,21 +1,9 @@
-# -*- coding: utf-8 -*-
 """
-core/llm/client.py —— LLM 统一调用（DeepSeek）
-==============================================
-对应《开发文档》阶段三：
-  - 意图识别：function calling 输出 tool_call
-  - 二次模型回调：把检索结果与用户问题再次交给 LLM，生成（流式）回复
+ LLM 统一调用（DeepSeek）
 
-技术选型（文档未细化的部分）：
-  - 使用 openai SDK 对接 DeepSeek（OpenAI 兼容 API），密钥、base_url、模型名等
-    配置统一在 config/settings.py（DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL /
-    DEEPSEEK_MODEL，默认 deepseek-chat），本模块不再直接读取环境变量；
-  - 提供三类能力：
-        chat()            非流式补全（测试/内部用）
-        chat_stream()     流式补全（SSE 逐字下发，供 /v1/chat/text）
-        function_call()   工具调用（意图识别），返回解析后的 tool_calls
-  - 超时：统一取 settings.deepseek_timeout，避免请求挂死；
-    调用失败抛 LLMError（定义于 src/common/exceptions.py），由上层 chat_service 做兜底。
+- 使用 openai SDK 对接 DeepSeek（OpenAI 兼容 API），配置统一取自 config/settings.py；
+- 三类能力：chat() 非流式补全 / chat_stream() 流式补全 / function_call() 工具调用（意图识别）；
+- 超时统一取 settings.deepseek_timeout；调用失败抛 LLMError，由上层 chat_service 兜底。
 """
 import json
 import re
@@ -71,9 +59,7 @@ class LLMClient:
         """最近一次 LLM 调用（chat / chat_stream / function_call）的 token 消耗。"""
         return dict(self._last_usage)
 
-    # --------------------------------------------------------
     # 非流式补全
-    # --------------------------------------------------------
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -97,9 +83,7 @@ class LLMClient:
         except Exception as e:
             raise LLMError(f"LLM 非流式调用失败: {e}") from e
 
-    # --------------------------------------------------------
     # 流式补全
-    # --------------------------------------------------------
     def chat_stream(
         self,
         messages: List[Dict[str, str]],
@@ -129,9 +113,7 @@ class LLMClient:
         except Exception as e:
             raise LLMError(f"LLM 流式调用失败: {e}") from e
 
-    # --------------------------------------------------------
     # Function calling（意图识别）
-    # --------------------------------------------------------
     def function_call(
         self,
         messages: List[Dict[str, str]],
@@ -194,9 +176,7 @@ class LLMClient:
             parsed = self._parse_content_calls(content)
         return parsed
 
-    # --------------------------------------------------------
     # 工具调用解析辅助
-    # --------------------------------------------------------
     @staticmethod
     def _parse_call(call_id: str, name: str, arguments_raw: str) -> Dict[str, Any]:
         """把原始 arguments 字符串解析为 dict（失败保留 _raw）。"""
@@ -252,9 +232,7 @@ class LLMClient:
             calls.append({"id": f"call_{len(calls)}", "name": name, "arguments": {}})
         return calls
 
-    # --------------------------------------------------------
     # 消息构建辅助
-    # --------------------------------------------------------
     @staticmethod
     def build_messages(
         system_prompt: str,

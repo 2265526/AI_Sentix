@@ -1,10 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-core/agent/tools.py —— function-calling 工具 schema
-=====================================================
-对应《开发文档》阶段三任务 1（意图识别 Tools 设计）与「一、核心路由策略」：
-  - query_inventory / query_price → 结构化数据库检索（SQL）
-  - query_knowledge / product_recommendation → RAG 向量检索
+function-calling 工具 schema
 
 工具清单：
   1. get_product_inventory  查商品库存与物流时效（SQL：product_catalog + inventory_logistics）
@@ -12,15 +7,12 @@ core/agent/tools.py —— function-calling 工具 schema
   3. get_knowledge_base     查知识库（RAG：售后政策/使用说明/FAQ）
   4. product_recommendation 商品推荐（RAG：商品说明书/评价语料）
 
-每个工具的参数均为可选字段：模型能填多少填多少，
-例如按 SKU 精确查，或按商品名称模糊查。
+每个工具的参数均为可选字段：模型能填多少填多少（如按 SKU 精确查，或按商品名称模糊查）。
 """
 import re
 from typing import Any, Dict, List, Optional
 
-# ------------------------------------------------------------
 # 工具定义（OpenAI function-calling 格式）
-# ------------------------------------------------------------
 TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -201,11 +193,8 @@ SQL_TOOLS = {"get_product_inventory", "get_product_price", "product_recommendati
 # 工具名 → 该工具是否为 RAG 知识库检索（走向量库）
 RAG_TOOLS = {"get_knowledge_base"}
 
-# ------------------------------------------------------------
 # 工具名容错映射
-# ------------------------------------------------------------
-# 实测 DeepSeek deepseek-chat 可能"发明"工具名（如 price_inventory）或以
-# 不同写法返回（query_price / knowledge 等），这里做别名归一化。
+
 TOOL_NAME_ALIASES: Dict[str, str] = {
     # 价格
     "get_product_price": "get_product_price",

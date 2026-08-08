@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 上下文组装
 
@@ -12,7 +11,7 @@ from typing import List
 from src.common.constants import MAX_CONTEXT_CHARS
 from .retriever import ChunkHit
 
-# 上下文总长度上限（字符，统一见 src/common/constants.py）。按中文场景估算
+# 上下文总长度上限。按中文场景估算
 # ~2 个字符/token，默认上限 ~6k token 的片段量，防止拼接超窗；可按模型调整。
 
 

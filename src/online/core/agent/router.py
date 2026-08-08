@@ -1,22 +1,12 @@
-# -*- coding: utf-8 -*-
 """
-core/agent/router.py —— 服务路由（工具调用分发）
-=================================================
-对应《开发文档》阶段三任务 2：
-  (1) get_product_inventory / get_product_price → SQL 检索 → 返回严格参数
-  (2) get_knowledge_base / product_recommendation → 调用阶段二 RAG 引擎
+ 服务路由（工具调用分发）
 
-V2.2.1 架构优化（检索参数归一化 + 统一降级链）：
-  - LLM 输出的 arguments 先经 params.normalize_arguments 归一化
-    （清洗意图词 / 文本价格解析），永不直通 SQL；
-  - 结构化检索走统一多级降级链 _structured_search：
-      L1 归一化名称精确 → L2 品牌 + 类目组合 → L3 类目检索 → L4 型号/核心词 → 空
-    覆盖「整句塞 product_name」「只给类目不给关键词」等模型输出缺陷。
-
-分发规则：
-  - 结构化工具：product_repo / inventory_repo（精确数值，参数化 SQL）
-  - RAG 工具：kb_repo（混合检索 + Rerank）
-  - 未知工具：返回错误信息，不影响主流程
+- 结构化工具（get_product_inventory / get_product_price）：SQL 检索，参数先经
+  params.normalize_arguments 归一化（清洗意图词 / 文本价格解析），永不直通 SQL；
+- RAG 工具（get_knowledge_base / product_recommendation）：调用混合检索引擎；
+- 结构化检索走统一多级降级链 _structured_search：L1 名称精确 → L2 品牌+类目组合
+  → L3 类目检索 → L4 型号/核心词 → 空，覆盖「整句塞 product_name」「只给类目不给关键词」等缺陷；
+- 未知工具：返回错误信息，不影响主流程。
 """
 import logging
 from typing import Any, Dict, List, Optional
@@ -60,7 +50,7 @@ _KEY_ALIASES: Dict[str, tuple] = {
     "product_name": ("product_name", "product", "name", "title", "goods"),
     "query": ("query", "question", "text", "keyword", "category", "product_type", "type", "需求"),
     "doc_type": ("doc_type", "type"),
-    # V1.2.5 分级过滤参数（结构化商品检索）
+    # 分级过滤参数（结构化商品检索）
     "category_big": ("category_big", "big_category", "大类"),
     "category_small": ("category_small", "small_category", "sub_category", "小类"),
     "category_path": ("category_path", "path", "category", "类目", "类目路径"),
@@ -117,9 +107,7 @@ def _core_keywords(text: str) -> List[str]:
     return sorted(toks, key=len, reverse=True)
 
 
-# ============================================================
 # 统一结构化检索（多级降级链）
-# ============================================================
 def _structured_search(conn, tool_name: str, norm: Dict[str, Any]) -> tuple:
     """
     多级降级检索商品（库存联表 / 价格），覆盖模型参数缺陷：
@@ -161,9 +149,8 @@ def _structured_search(conn, tool_name: str, norm: Dict[str, Any]) -> tuple:
         if rows:
             return rows, 1
 
-    # L0.5：纯类目词优先走类目检索（P1-6）。
+    # L0.5：纯类目词优先走类目检索。
     # '手机'/'衬衫'/'连衣裙' 等泛化品类词直接 ILIKE 名称会被配件/周边淹没
-    # （实测名称含'手机' 674 件几乎全是手机包/钱包，真正手机名不含'手机'），
     # 类目检索能精确落到该品类本体（'手机'→ 手机数码/手机 中类，排除手机配件）。
     if name and name in _CATEGORY_WORDS_SET:
         level_key, level_val = _CATEGORY_LEVEL[name]

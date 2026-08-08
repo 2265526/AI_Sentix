@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 — 混合检索引擎（BM25 关键词 + 语义向量 双路召回）
 """
@@ -16,9 +15,7 @@ from rank_bm25 import BM25Okapi
 
 from config.settings import settings
 
-# ------------------------------------------------------------
-# 召回参数默认值（可经 .env 调整，见 config/settings.py）
-# ------------------------------------------------------------
+# 召回参数默认值
 VECTOR_TOP_K = settings.vector_top_k   # 向量路每路召回数（Rerank 前的候选池）
 BM25_TOP_K = settings.bm25_top_k       # BM25 路每路召回数
 MAX_QUERY_LEN = settings.max_query_len  # 查询文本截断长度（与 /rag/search 接口 query 上限一致）
@@ -85,9 +82,7 @@ def tokenize(text: str) -> List[str]:
     return tokens
 
 
-# ------------------------------------------------------------
 # 统一的召回结果结构
-# ------------------------------------------------------------
 @dataclass
 class ChunkHit:
     """一条召回的知识分块结果（双路分数 + 融合分数）。"""
@@ -107,9 +102,7 @@ class ChunkHit:
         return (self.doc_id, self.chunk_index)
 
 
-# ------------------------------------------------------------
 # 语义向量召回
-# ------------------------------------------------------------
 class VectorRetriever:
     """基于 pgvector 余弦距离的语义召回。"""
 
@@ -175,9 +168,7 @@ class VectorRetriever:
         return hits
 
 
-# ------------------------------------------------------------
 # 关键词 BM25 召回
-# ------------------------------------------------------------
 class BM25Retriever:
     """
     jieba 分词 + BM25Okapi 关键词召回。
@@ -313,9 +304,7 @@ _BM25_CACHE: Dict[str, Any] = {
 _BM25_LOCK = threading.RLock()
 
 
-# ------------------------------------------------------------
 # 混合检索（双路召回 + 归一化融合）
-# ------------------------------------------------------------
 class HybridRetriever:
     """
     双路召回入口：向量路 + BM25 路并行召回，合并去重后交给 Reranker。

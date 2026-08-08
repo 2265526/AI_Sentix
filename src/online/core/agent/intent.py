@@ -1,22 +1,11 @@
-# -*- coding: utf-8 -*-
 """
-core/agent/intent.py —— 意图识别（意图预分类 + LLM function calling）
-=========================================================================
-对应《开发文档》阶段三任务 1：
-  "在'意图识别'环节，大模型输出 tool_call"
+意图识别（意图预分类 + LLM function calling）
 
-V2.2.2 架构优化（调研方案 P0「intent 与 tool selection 分离」）：
-  - 先由规则预分类器 _classify_intent 输出意图标签（FAQ / RECOMMEND /
-    PRICE / INVENTORY）；
-  - 命中时把 function calling 的工具集限制为该意图对应的原子工具，
-    避免 LLM 在全部工具间误选（如"手机进水怎么办"误判为商品推荐）；
-  - 未命中则走全量工具（保持原有能力）。
+先由规则预分类器 _classify_intent 输出意图标签（FAQ / RECOMMEND / PRICE / INVENTORY），
+命中时把 function calling 的工具集限制为该意图对应的原子工具，避免 LLM 在全部工具间误选；
+未命中则走全量工具。无工具调用 → 视为普通对话，直接由客服回答。
 
-流程：把用户问题 + （受限的）工具 schema 交给 LLM，模型返回要调用的工具及参数；
-无工具调用 → 视为普通对话，直接由客服回答。
-
-返回结构：
-    IntentResult.tool_calls = [{"id", "name", "arguments": dict}, ...]
+返回结构：IntentResult.tool_calls = [{"id", "name", "arguments": dict}, ...]
 """
 from dataclasses import dataclass, field
 import logging
@@ -52,11 +41,7 @@ class IntentResult:
         return self.tool_calls[0]["name"] if self.tool_calls else None
 
 
-# ------------------------------------------------------------
-# 规则意图预分类：intent 分类与 tool selection 分离（调研方案 P0）
-# 命中强信号词时，限制 function calling 的工具集，避免 LLM 误调用
-# （如"手机进水怎么办"被误判为商品推荐）。未命中则走全量工具。
-# ------------------------------------------------------------
+# 规则意图预分类（命中强信号词时限制工具集，避免 LLM 误调用）
 _INTENT_RULES = [
     # 售后 / 使用说明类（最优先：'手机进水怎么办' 必须走知识库而非商品检索）
     ("FAQ", ("怎么办", "坏了", "进水", "售后", "保修", "退换", "退货", "退款", "政策",

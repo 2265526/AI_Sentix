@@ -1,21 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 重排序服务（综合得分 + 相关性阈值 + Top-K）
-===================================================================
 
-实现说明：
-  - 综合得分 = 加权融合两路召回分数：
-        final_score = w_v * norm(vector_score) + w_b * norm(bm25_score)
-    其中 norm() 把各路分数归一化到 [0, 1]：
-        - 向量相似度（1 - 余弦距离）天然在 [0, 1]，直接使用；
-        - BM25 原始分无上界，按当批最大分归一化（max 归一化）。
-  - 权重默认 w_v=0.7 / w_b=0.3（语义为主、关键词为辅），可通过构造参数调整。
-  - 若某候选只有单路被召回（另一路分数为 None），则只用有分的那一路；
-    两路都未命中（理论不会出现）得分为 0。
-  - 阈值过滤：final_score <= threshold（默认 0.4）直接丢弃，> threshold 保留；
-    保留结果按 final_score 降序，取 top_k（默认 5）。
-  - 预留 cross-encoder 重排接口（可选）：
-    若部署了 bge-reranker 等模型，可注入 score_fn 对候选重新打分后套用同一阈值逻辑。
+综合得分 = 加权融合两路召回分数：
+    final_score = w_v * norm(vector_score) + w_b * norm(bm25_score)
+其中 norm() 把各路分数归一化到 [0, 1]（向量相似度天然在 [0,1]，BM25 按当批最大分归一化）；
+仅单路被召回时只用有分的那一路；final_score <= threshold 丢弃，降序取 top_k。
 """
 from typing import Callable, List, Optional
 
@@ -67,7 +56,6 @@ class Reranker:
         self.bm25_only_discount = bm25_only_discount
         self.score_fn = score_fn
 
-    # --------------------------------------------------------
     def _normalize_bm25(self, hits: List[ChunkHit]) -> None:
         """把当批 BM25 原始分按最大值归一化到 [0,1]。"""
         max_score = max((h.bm25_score or 0.0) for h in hits)
@@ -105,7 +93,6 @@ class Reranker:
         if hit.bm25_score is not None:
             return hit.bm25_score * self.bm25_only_discount
         return 0.0
-    # --------------------------------------------------------
     def rerank(self, hits: List[ChunkHit], query: str = "") -> List[ChunkHit]:
         """
         对混合召回结果重排序：
