@@ -1,24 +1,9 @@
-# -*- coding: utf-8 -*-
 """
-core/memory/extractor.py —— 实体抽取与上下文回写
-=================================================
-V2.2.0 短期记忆：从「工具原始数据 → 工具参数 → 用户问题正则兜底」三级抽取实体快照，
+实体抽取与上下文回写
+
+从「工具原始数据 → 工具参数 → 用户问题正则兜底」三级抽取实体快照，
 回写 session_context（防呆：实体全空不覆盖旧快照），并规则拼装 last_answer_summary
 （不调用 LLM，避免流式链路阻塞与额外计费）。
-
-快照结构（JSONB）：
-    {
-        "last_category_big": "手机数码",
-        "last_category_small": "智能手机",
-        "last_brand": "iPhone",
-        "last_mentioned_sku": "G054002",
-        "last_price_range": [3000, 5000],
-        "last_tool": "product_recommendation",
-        "last_query_keyword": "手机",
-        "last_answer_summary": "围绕 iPhone·智能手机，价位 3000-5000",
-        "updated_at": "2026-08-07 14:00:00",
-        "confidence": {"brand": 0.8, "category_small": 1.0, "price_range": 0.7}
-    }
 """
 import re
 from datetime import datetime
@@ -28,9 +13,7 @@ from src.online.core.agent import params
 from src.online.core.agent.enricher import _find_brand
 from src.online.db.repositories import memory_repo
 
-# ------------------------------------------------------------
 # 正则（价格 / SKU 兜底提取）
-# ------------------------------------------------------------
 # 价格数字：'3000以内' / '5千' / '1万' / '3000-5000' / '5000左右'
 _PRICE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(万|千)?\s*"
