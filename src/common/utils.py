@@ -1,10 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-src/common/utils.py —— 通用工具函数
-====================================
-对应《目录结构》中 src/common/utils.py 的职责："辅助函数"。
-
-放置被多个模块复用的纯函数；单一模块专用的逻辑保留在各模块内部。
+通用工具函数
 """
 import json
 from typing import Any, Dict, Optional

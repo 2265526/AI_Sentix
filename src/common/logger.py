@@ -1,8 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-src/common/logger.py —— 日志配置
-=================================
-对应《目录结构》中 src/common/logger.py 的职责："日志配置"。
+日志配置
 
 提供统一的应用日志初始化入口：
   - setup_logging()：应用入口（api/main.py）调用一次，全局生效；
@@ -15,7 +12,7 @@ _DEFAULT_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 
 def setup_logging(level: int = _DEFAULT_LEVEL, fmt: str = _DEFAULT_FORMAT) -> None:
-    """初始化根日志配置（幂等，可重复调用）。"""
+    """初始化根日志配置。"""
     logging.basicConfig(
         level=level,
         format=fmt,
