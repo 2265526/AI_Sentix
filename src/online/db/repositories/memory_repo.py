@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """
-db/repositories/memory_repo.py —— 记忆数据访问层
-==================================================
-V2.2.0 短期/长期记忆：
+记忆数据访问层
+
+短期/长期记忆：
   - session_context       会话上下文快照（短期记忆，30 分钟过期，turn_count 超限自动清空）
   - user_interaction_log  交互日志（预留，P0 起写入，供长期画像统计）
 
-写入统一 conn.commit()（参考 admin.py 的写入风格：try/commit/rollback/finally close），
-读取用 RealDictCursor（参考 product_repo.py）。
+写入统一 conn.commit()，
+读取用 RealDictCursor。
 """
 import json
 from typing import Any, Dict, Optional

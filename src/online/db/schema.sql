@@ -1,5 +1,5 @@
 -- ============================================================
--- 电商AI智能客服系统 —— 数据库 Schema（与《数据库设计手册 V1.0》对应）
+-- 电商AI智能客服系统 —— 数据库 Schema
 -- ============================================================
 -- 数据库：PostgreSQL（含 pgvector 扩展）
 -- 说明：本脚本为全新初始化脚本。执行会删除并重建以下 4 张表（数据会丢失）：
@@ -119,7 +119,7 @@ CREATE INDEX idx_chunks_index ON kb_chunks (chunk_index);
 -- 向量相似度搜索（手册：idx_chunks_vector_hnsw，HNSW 余弦距离，vector_cosine_ops）
 CREATE INDEX idx_chunks_vector_hnsw ON kb_chunks
     USING hnsw (chunk_vector vector_cosine_ops);
--- 加速按类目过滤知识分块（V2.1.0：meta_data 冗余类目字段的表达式索引）
+-- 加速按类目过滤知识分块（meta_data 冗余类目字段的表达式索引）
 CREATE INDEX idx_chunks_category_big ON kb_chunks ((meta_data->>'category_big'));
 CREATE INDEX idx_chunks_category_small ON kb_chunks ((meta_data->>'category_small'));
 CREATE INDEX idx_chunks_category_path ON kb_chunks ((meta_data->>'category_path'));
@@ -153,7 +153,7 @@ COMMENT ON COLUMN kb_chunks.meta_data    IS '元数据标签，用于 Rerank 阶
 COMMENT ON COLUMN kb_chunks.created_at   IS '记录创建时间';
 
 -- ============================================================
--- V2.2.0 短期/长期记忆（会话上下文 + 用户画像 + 交互日志）
+-- 短期/长期记忆（会话上下文 + 用户画像 + 交互日志）
 -- ============================================================
 
 -- 5.1 会话上下文表（短期记忆：会话维度 JSONB 快照，30 分钟过期）

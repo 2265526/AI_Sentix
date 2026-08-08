@@ -1,22 +1,9 @@
-# -*- coding: utf-8 -*-
 """
-db/repositories/inventory_repo.py —— 库存与物流数据访问层
-==========================================================
-阶段三结构化检索（查库存/物流时效）用：
-product_catalog + inventory_logistics 联表，按 SKU 精确 / 名称模糊查询。
+ 库存与物流数据访问层
 
-V1.2.5 起支持「分级过滤」检索（与 product_repo 同规则，参考《数据库设计手册》商品信息表）：
-    一级  sku_code        精确匹配
-    二级  product_name    名称关键词模糊匹配（ILIKE）
-    三级  category_big    大类（中文）精确过滤
-    四级  category_small  小类（中文）精确过滤
-    五级  category_path   类目完整路径模糊匹配（ILIKE，含前缀）
-    六级  min_price / max_price  价格区间过滤
-    七级  in_stock_only   仅返回有库存商品
-规则：已提供的条件全部生效（AND 逐级收紧），未提供的条件自动跳过；
-无任何过滤条件时返回空列表（避免全表扫描）。
-
-安全：所有条件参数化绑定，LIKE 模式经参数传入。
+product_catalog + inventory_logistics 联表，按 SKU 精确 / 名称模糊查询，
+支持分级过滤（规则同 product_repo）：SKU 精确 → 名称模糊 → 类目 → 价格区间 → 仅看有库存。
+无任何过滤条件时返回空列表（避免全表扫描）；所有条件参数化绑定。
 """
 from typing import Any, Dict, List, Optional
 
@@ -106,7 +93,7 @@ def search_inventory(
     )
     if not clauses:
         return []
-    # 相关性排序（P1-7）：名称关键词存在时 精确 > 前缀 > 包含 > id
+    # 相关性排序：名称关键词存在时 精确 > 前缀 > 包含 > id
     order_frag, sort_params = relevance_order(product_name)
 
     sql = f"""

@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 """
-db/session.py —— 数据库会话管理
-================================
-阶段二 RAG 引擎的数据库连接层：
+数据库会话管理
+
+数据库连接层：
   - 从 .env 读取 DATABASE_URL（postgresql://...），未配置直接报错（不内置明文密码）；
   - 使用 psycopg2 连接池（SimpleConnectionPool），避免每个请求新建连接的
     开销与 max_connections 风险；

@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """
-db/repositories/kb_repo.py —— 知识库数据访问层
-===============================================
-阶段三 RAG 检索（get_knowledge_base / product_recommendation）的封装：
-复用阶段二混合检索引擎（HybridRetriever + Reranker），与 /rag/search 同链路。
+ 知识库数据访问层
+
+知识库检索封装（get_knowledge_base / product_recommendation）：
+复用混合检索引擎（HybridRetriever + Reranker），与 /rag/search 同链路。
 """
 from typing import Any, Dict, List, Optional
 

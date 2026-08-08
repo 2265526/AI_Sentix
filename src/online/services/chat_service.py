@@ -1,17 +1,12 @@
-# -*- coding: utf-8 -*-
 """
-services/chat_service.py —— 文本对话服务编排
-=============================================
-对应《开发文档》阶段三任务 3 与产出物：
-  "将检索结果（SQL 实体或 RAG 片段）和用户问题再次丢给 LLM，生成最终的流式回复"
-  "Agent 核心服务，支持文本输入、流式输出"
+文本对话服务编排
 
 编排链路（一次对话）：
   1. 意图识别（LLM function calling）→ tool_call
-  2. 服务路由（router）执行工具：SQL 检索 或 阶段二 RAG 引擎
+  2. 服务路由（router）执行工具：SQL 检索 或 RAG 引擎
   3. 二次模型回调：工具结果 + 用户问题 → LLM 生成最终回复（流式/非流式）
 
-降级策略（文档阶段五完整实现，这里保留基础版）：
+降级策略：
   - 意图识别失败：跳过工具，直接 LLM 回答；
   - 二次回调失败：返回预置兜底话术，保证接口不 500。
 """
@@ -78,7 +73,7 @@ _FALLBACK_TOOL = {
     "RECOMMEND": "product_recommendation",
 }
 
-# 预分类标签 → 直驱工具（P1-5：预分类命中直接执行，不依赖 LLM function calling 选工具）
+# 预分类标签 → 直驱工具（预分类命中直接执行，不依赖 LLM 选工具）
 _INTENT_TOOL = {
     "FAQ": "get_knowledge_base",
     "RECOMMEND": "product_recommendation",
@@ -105,11 +100,11 @@ def _fallback_tool_call(intent_tag: Optional[str], query: str) -> Optional[Dict[
     """
     决策兜底：模型未调用工具时，依据预分类标签 / SKU / 商品词信号强制走一次结构化检索。
 
-    P0-2：FAQ 语义强制走一次知识库检索（与商品兜底对称，避免 LLM 未调用
-          get_knowledge_base 时零检索瞎答"未收录"）；RAG 为语义检索，query 用原句不清洗。
-    P0-3：query 含 SKU 码（如 G000115）时直接按 sku_code 精确匹配，绕过名称模糊。
-    P0-4：product_name 先经 clean_product_name 预清洗（去掉'库存/价格/多少'等
-          意图词），保证 L1 名称模糊匹配能命中精确商品。
+    - FAQ 语义强制走一次知识库检索（与商品兜底对称，避免 LLM 未调用 get_knowledge_base
+      时零检索瞎答"未收录"）；RAG 为语义检索，query 用原句不清洗；
+    - query 含 SKU 码（如 G000115）时直接按 sku_code 精确匹配，绕过名称模糊；
+    - product_name 先经 clean_product_name 预清洗（去掉'库存/价格/多少'等意图词），
+      保证 L1 名称模糊匹配能命中精确商品；
     返回兜底 tool_call 或 None（纯寒暄/FAQ 语义不兜底商品检索）。
     """
     if intent_tag == "FAQ":
@@ -132,7 +127,7 @@ def _fallback_tool_call(intent_tag: Optional[str], query: str) -> Optional[Dict[
 
 def _resolve_tool_calls(intent, query: str) -> List[Dict[str, Any]]:
     """
-    P1-5 预分类直驱：预分类命中（实测规则分类器 4/4 稳定）时，工具已确定，
+    预分类直驱：预分类命中（实测规则分类器 4/4 稳定）时，工具已确定，
     直接构造对应工具调用——不再依赖 LLM function calling 做路由选择；
     LLM 若返回了 arguments（如品牌/型号/价格）则优先采用，缺失键用兜底默认值补全。
     预分类未命中：沿用 LLM tool_calls；为空再走 _fallback_tool_call。
@@ -165,7 +160,7 @@ def _resolve_tool_calls(intent, query: str) -> List[Dict[str, Any]]:
 @dataclass
 class ChatState:
     """
-    单次对话的结构化状态（调研方案 P0「structured state」）。
+    单次对话的结构化状态。
 
     贯穿 ①记忆读取 → ②增强 → ③意图 → ④工具 → ⑤回写 → ⑥⑦二次回调 全链路，
     让每个环节的产出可观测（trace）、可扩展。
@@ -189,9 +184,7 @@ class ChatService:
     def __init__(self, llm: Optional[LLMClient] = None):
         self.llm = llm or LLMClient()
 
-    # --------------------------------------------------------
-    # 内部：记忆读取与问题增强（①读 session_context ②enrich_query）
-    # --------------------------------------------------------
+    # 记忆读取与问题增强（①读 session_context ②enrich_query）
     def _load_memory(
         self, conn, session_id: str, query: str, history: Optional[List[Dict[str, str]]]
     ) -> Dict[str, Any]:
@@ -234,9 +227,7 @@ class ChatService:
                 pass
             return {"enhanced_query": query, "context_reset": False, "original": query}
 
-    # --------------------------------------------------------
-    # 内部：记忆回写（⑤实体抽取回写 + 交互日志）
-    # --------------------------------------------------------
+    # 记忆回写（⑤实体抽取回写 + 交互日志）
     def _save_memory(
         self,
         conn,
@@ -276,9 +267,7 @@ class ChatService:
                 pass
             return False
 
-    # --------------------------------------------------------
-    # 内部：组装二次回调消息
-    # --------------------------------------------------------
+    # 组装二次回调消息
     def _build_reply_messages(
         self,
         query: str,
@@ -292,9 +281,7 @@ class ChatService:
             tool_results=tool_results,
         )
 
-    # --------------------------------------------------------
     # 非流式对话（测试/内部使用）
-    # --------------------------------------------------------
     def chat(
         self,
         conn,
@@ -407,7 +394,7 @@ class ChatService:
         prompt_tokens, completion_tokens = _accumulate_tokens(
             prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
-        # 监控记录（V2.2.2：请求级时间线；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
+        # 监控记录（请求级时间线；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
             ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             session_id=session_id or "",
@@ -448,9 +435,7 @@ class ChatService:
             "enriched_query": state.enhanced_query,
         }
 
-    # --------------------------------------------------------
     # 流式对话（SSE）
-    # --------------------------------------------------------
     def chat_stream(
         self,
         conn,
@@ -584,7 +569,7 @@ class ChatService:
         prompt_tokens, completion_tokens = _accumulate_tokens(
             prompt_tokens, completion_tokens, getattr(self.llm, "get_last_usage", lambda: {})())
 
-        # 监控记录（V2.2.2；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
+        # 监控记录（请求级时间线；tool 记录"实际执行"的主工具，而非意图阶段选中的工具）
         monitor_store.record(MonitorRequest(
             ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             session_id=session_id or "",

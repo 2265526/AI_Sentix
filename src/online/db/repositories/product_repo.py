@@ -1,21 +1,12 @@
-# -*- coding: utf-8 -*-
 """
-db/repositories/product_repo.py —— 商品数据访问层（product_catalog）
-====================================================================
-阶段三结构化检索（查价格）用：按 SKU 精确 / 商品名称模糊查询商品。
+商品数据访问层（product_catalog）
 
-V1.2.5 起支持「分级过滤」检索（参考《数据库设计手册》商品信息表字段）：
-    一级（最精确）  sku_code        精确匹配
-    二级            product_name    名称关键词模糊匹配（ILIKE）
-    三级            category_big    大类（中文）精确过滤
-    四级            category_small  小类（中文）精确过滤
-    五级            category_path   类目完整路径模糊匹配（ILIKE，含前缀）
-    六级            min_price / max_price  价格区间过滤
-    七级            in_stock_only   仅返回有库存（stock_quantity > 0）商品
-规则：已提供的条件全部生效（AND 逐级收紧），未提供的条件自动跳过；
+按 SKU 精确 / 商品名称模糊查询商品，支持分级过滤：
+    一级 sku_code 精确 → 二级 product_name 模糊（ILIKE）→ 三级 category_big → 四级 category_small
+    → 五级 category_path 模糊 → 六级 价格区间 → 七级 in_stock_only
+规则：已提供的条件全部生效（AND 逐级收紧），未提供的自动跳过；
 无任何过滤条件时返回空列表（避免全表扫描）。
-
-安全：所有条件参数化绑定（%s），LIKE 模式经参数传入，无字符串拼接。
+所有条件参数化绑定，LIKE 模式经参数传入，无字符串拼接。
 """
 from typing import Any, Dict, List, Optional
 
@@ -120,7 +111,7 @@ def search_products(
     if not clauses:
         # 无任何过滤条件：不返回数据，避免全表扫描
         return []
-    # 相关性排序（P1-7）：名称关键词存在时 精确 > 前缀 > 包含 > id
+    # 相关性排序：名称关键词存在时 精确 > 前缀 > 包含 > id
     order_frag, sort_params = relevance_order(product_name)
 
     sql = f"""
