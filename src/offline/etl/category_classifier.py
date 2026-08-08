@@ -1,27 +1,17 @@
-# -*- coding: utf-8 -*-
 """
-category_classifier.py —— 分级类目体系与自动分类
-==================================================
-类目体系依据：Shopee 官方类目树（联网抓取 shopee.com.mx / .br /api/v4/pages/get_category_tree）
-+ 本仓库商品 breadcrumb 实际分布归纳。三级结构：大类（13 个）→ 中类 → 小类。
+分级类目体系与自动分类
 
-入库自动分类（"入库的时候判断是哪个类"，只考虑中文场景）：
+三级结构：大类（13 个）→ 中类 → 小类。入库自动分类：
   1. 有中文 breadcrumb（如 ["服装鞋包","女装","衬衫"]）：按路径段匹配类目树；
   2. 无 breadcrumb 或路径非中文（默认场景）：按商品名中文关键词分类；
   3. 都未命中：归入「其他/其他」。
-
-用法：
-    from category_classifier import classify_by_keywords, classify_by_breadcrumb,
-                                    ensure_category_tree
 """
 import logging
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
 # 一、三级类目种子树（大类 → 中类 → 小类）
-# ============================================================
 CATEGORY_TREE: Dict[str, Dict[str, List[str]]] = {
     "服装鞋包": {
         "女装": ["衬衫", "T恤", "连衣裙", "牛仔裤", "裤装", "外套", "内衣家居服", "睡衣"],
@@ -120,11 +110,7 @@ CATEGORY_TREE: Dict[str, Dict[str, List[str]]] = {
 FALLBACK = ("其他", "其他", "其他/其他")
 
 
-
-
-# ============================================================
 # 三、关键词 → (大类, 小类) 分类器（在线 CSV 无 breadcrumb 时使用）
-# ============================================================
 KEYWORD_MAP: List[Tuple[List[str], str, str]] = [
     # 服装鞋包
     (["连衣裙", "裙子", "长裙", "短裙", "半身裙"], "服装鞋包", "女装"),
@@ -180,7 +166,7 @@ KEYWORD_MAP: List[Tuple[List[str], str, str]] = [
     (["婴儿", "bebé", "baby", "宝宝", "儿童", "niño", "kids", "童装", "童鞋"], "母婴玩具", "婴童服饰"),
     (["婴儿车", "cochecito", "stroller", "儿童座椅", "背带", "婴儿床"], "母婴玩具", "童车座椅"),
     (["孕妇", "maternidad", "maternity", "孕期"], "母婴玩具", "孕妇用品"),
-    # 汽摩（提前于运动户外，避免"摩托车头盔"被"骑行"误分）
+    # 汽摩
     (["摩托", "moto", "motorcycle", "头盔", "casco", "车", "coche", "car", "汽车", "auto", "车灯", "轮胎", "llanta", "tire", "车蜡", "cera", "润滑油", "aceite motor", "刹车", "freno"], "汽车摩托配件", "摩托车"),
     # 运动户外
     (["健身", "fitness", "gym", "哑铃", "yoga", "瑜伽", "运动器械", "跑步机", "健身车"], "运动户外", "健身器材"),
@@ -209,7 +195,7 @@ KEYWORD_MAP: List[Tuple[List[str], str, str]] = [
     (["其他", "otros", "other", "lại", "khác"], "其他", "其他"),
 ]
 
-# 小类关键词 → 大类内具体小类（更细粒度，按大类内匹配）
+# 小类关键词 → 大类内具体小类
 SMALL_KEYWORD_MAP: Dict[str, Tuple[str, str]] = {    # 服装鞋包
     "衬衫": ("服装鞋包", "女装"), "衬衣": ("服装鞋包", "女装"), "连衣裙": ("服装鞋包", "女装"),
     "裙子": ("服装鞋包", "女装"), "T恤": ("服装鞋包", "男装"), "牛仔裤": ("服装鞋包", "男装"),
@@ -250,10 +236,7 @@ SMALL_KEYWORD_MAP: Dict[str, Tuple[str, str]] = {    # 服装鞋包
 }
 
 
-# ============================================================
 # 四、分类函数
-# ============================================================
-
 
 
 def _contains_any(text: str, keywords: List[str]) -> bool:
@@ -263,7 +246,7 @@ def _contains_any(text: str, keywords: List[str]) -> bool:
 
 def classify_by_breadcrumb(path: List[str]) -> Optional[Tuple[str, str, str]]:
     """
-    按中文 breadcrumb 路径分类（只考虑中文场景）。
+    按中文 breadcrumb 路径分类
     Args:
         path: 中文类目路径列表（如 ["服装鞋包", "女装", "衬衫"]）
     Returns:
@@ -308,7 +291,7 @@ def classify_by_keywords(text: str) -> Tuple[str, str, str]:
     if not text:
         return FALLBACK
     t = text.lower()
-    # 1) 优先精确小类词（SMALL_KEYWORD_MAP，更具体，避免"纸尿裤"命中"裤"这类误分）
+    # 1) 优先精确小类词
     for kw, (big, small) in SMALL_KEYWORD_MAP.items():
         if kw.lower() in t:
             return big, small, f"{big}/{small}"
@@ -328,9 +311,7 @@ def classify(text: str, breadcrumb: Optional[List[str]] = None) -> Tuple[str, st
     return classify_by_keywords(text)
 
 
-# ============================================================
-# 五、类目树入库（幂等）
-# ============================================================
+# 五、类目树入库
 def ensure_category_tree(cur) -> Dict[Tuple[str, str], int]:
     """
     把 CATEGORY_TREE 幂等写入 category 表（存在则跳过）。

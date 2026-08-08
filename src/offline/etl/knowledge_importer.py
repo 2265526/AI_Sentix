@@ -1,32 +1,10 @@
-# -*- coding: utf-8 -*-
 """
-knowledge_importer.py —— 外部知识文档（政策/FAQ 数据）导入 RAG 知识库
-====================================================================
-配置与风格参考 shopee_importer.py：
-  - 从 .env 读取数据库连接与 embedding 配置
-  - 文档切分（langchain RecursiveCharacterTextSplitter）+ 向量化
-  - 写入 pgvector 表：kb_documents（原始文档）/ kb_chunks（向量分块）
-  - 支持幂等重导：同 (doc_type, source_url) 的旧数据先删除再写入
+外部知识文档（政策/FAQ 数据）导入 RAG 知识库
 
-用法：
-  # 导入目录下所有 .docx / .txt / .md（默认 doc_type=policy）
-  python knowledge_importer.py --dir  /home/cai/t_data/AI_Sentix/knowledge_docs
-
-  # 导入单个文件，并指定文档类型
-  python knowledge_importer.py --file  /path/to/电商常见问题FAQ.docx --doc-type faq
-
-  # 多个文件
-  python knowledge_importer.py --file a.docx --file b.md --doc-type policy
-
-依赖（缺失会给出安装提示）：
-  pip install python-docx psycopg2-binary pgvector openai langchain-text-splitters python-dotenv
-
-.env 参考配置（均可选，脚本有默认值，默认指向本地 Ollama）：
-  EMBEDDING_BASE_URL=http://localhost:11434/v1
-  EMBEDDING_API_KEY=ollama
-  EMBEDDING_MODEL=qwen3-embedding:0.6b
-  EMBEDDING_DIM=1024
-  DATABASE_URL=postgresql://postgres:236591@localhost:5432/postgres
+- 从 .env 读取数据库连接与 embedding 配置（统一取自 config/settings.py）；
+- 文档切分（langchain RecursiveCharacterTextSplitter）+ 向量化；
+- 写入 pgvector 表：kb_documents（原始文档）/ kb_chunks（向量分块）；
+- 支持幂等重导：同 (doc_type, source_url) 的旧数据先删除再写入。
 """
 
 import os
@@ -43,17 +21,14 @@ from pgvector.psycopg2 import register_vector
 from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# 项目根加入 sys.path：保证以 `python src/offline/etl/knowledge_importer.py` 直接运行时，
-# 也能 import config.settings（统一配置入口）
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.settings import settings  # noqa: E402
 
-# ============================================================
-# 配置（统一取自 config/settings.py，值来自 .env / Settings.from_env 默认值）
-# ============================================================
+# 配置
 EMBEDDING_BASE_URL = settings.embedding_base_url
 EMBEDDING_API_KEY = settings.embedding_api_key
 EMBEDDING_MODEL = settings.embedding_model
@@ -67,9 +42,7 @@ CHUNK_SIZE = settings.etl_chunk_size
 CHUNK_OVERLAP = settings.etl_chunk_overlap
 SUPPORTED_EXT = (".docx", ".txt", ".md")
 
-# ============================================================
 # 初始化
-# ============================================================
 client = OpenAI(api_key=EMBEDDING_API_KEY, base_url=EMBEDDING_BASE_URL)
 
 text_splitter = RecursiveCharacterTextSplitter(
@@ -80,7 +53,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 
 
 def get_embedding(text: str) -> List[float]:
-    """调用 embedding API；失败时返回全零向量（与 shopee_importer.py 一致）"""
+    """调用 embedding API；失败时返回全零向量"""
     if not text or len(text.strip()) < 5:
         return [0.0] * EMBEDDING_DIM
     try:
@@ -92,9 +65,7 @@ def get_embedding(text: str) -> List[float]:
         return [0.0] * EMBEDDING_DIM
 
 
-# ============================================================
 # 文档解析
-# ============================================================
 def read_docx(file_path: str) -> List[Tuple[Optional[str], str]]:
     """读取 .docx，按 Heading 样式拆分为 [(章节标题, 正文), ...]"""
     try:
@@ -165,9 +136,7 @@ def parse_document(file_path: str) -> List[Tuple[Optional[str], str]]:
     return []
 
 
-# ============================================================
 # 导入逻辑
-# ============================================================
 def import_document(cur, file_path: str, doc_type: str) -> Tuple[int, int]:
     """
     导入单个文件。返回 (文档数, 向量块数)。
