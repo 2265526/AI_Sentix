@@ -5,10 +5,10 @@ import { chatTextStream, chatAudio } from '../api.js'
 
 const { TextArea } = Input
 
-// 音量条数量（微信式：一排竖条随音量起伏）
+// 音量条数量
 const VOL_BARS = 15
 
-// 会话标识 localStorage 键：短期记忆按会话隔离，刷新/重开页面不丢
+// 会话标识：短期记忆按会话隔离，刷新/重开页面不丢
 const SESSION_KEY = 'ai_sentix_session_id'
 
 // 生成会话标识（优先 crypto.randomUUID；非安全上下文时降级随机串）
@@ -17,7 +17,7 @@ const genSessionId = () =>
     ? crypto.randomUUID()
     : `sid-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
-// 消息：{ role: 'user'|'assistant', content, audioUrl? }
+// 消息
 export default function ChatPage() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -49,7 +49,7 @@ export default function ChatPage() {
     .slice(-10)
     .map((m) => ({ role: m.role, content: m.content }))
 
-  // ---------- 录音音量监测（Web Audio 实时 RMS） ----------
+  // ---------- 录音音量监测----------
   const stopMeter = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = null
@@ -87,8 +87,6 @@ export default function ChatPage() {
   }
 
   // ---------- 智能跟随滚动 ----------
-  // 在底部范围（80px 内）视为"在底部"：客服回复实时跟随下滑；
-  // 用户向上翻阅历史则保持不动，滚回底部范围后恢复跟随。
   const BOTTOM_RANGE = 80
 
   const handleScroll = () => {
@@ -103,7 +101,7 @@ export default function ChatPage() {
     return () => el?.removeEventListener('scroll', handleScroll)
   }, [])
 
-  // 消息更新（含流式 token）时：仅在底部范围才跟随滚动，否则保持用户阅读位置
+  // 消息更新时：仅在底部范围才跟随滚动，否则保持用户阅读位置
   useEffect(() => {
     const el = scrollRef.current
     if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight
@@ -121,7 +119,7 @@ export default function ChatPage() {
     setStreaming(false)
   }
 
-  // ---------- 文本发送（回车即发，无发送按钮） ----------
+  // ---------- 文本发送（回车即发送） ----------
   const send = async () => {
     const text = input.trim()
     if (!text || loading) return
@@ -134,7 +132,7 @@ export default function ChatPage() {
     try {
       await chatTextStream(text, history, sid, {
         onMeta: (evt) => {
-          if (sid !== sessionIdRef.current) return // 已新建会话，忽略旧流回调
+          if (sid !== sessionIdRef.current) return // 已新建会话
           // 后端短期记忆过期：本地有历史时清空界面并温柔提示，随后开启新对话
           if (evt.context_reset === true && messages.length > 0) {
             setMessages([])
@@ -165,11 +163,9 @@ export default function ChatPage() {
     }
   }
 
-  // ---------- 语音对话（录音 → /v1/chat/audio → 播放回复） ----------
-  // 麦克风状态独立：只有用户点击录音（recording）才显示"使用中"，
-  // 客服回复（LLM 处理 / 播放语音）不影响麦克风状态，可与用户录音并发
+  // ---------- 语音对话----------
   const startRecord = async () => {
-    if (recording) return  // 仅防连点重复录音；请求进行中不拦截（麦克风与客服回复并发）
+    if (recording) return  // 防连点重复录音；请求进行中不拦截
     if (!navigator.mediaDevices?.getUserMedia) {
       message.warning('当前浏览器不支持录音（需 HTTPS 或 localhost）')
       return
@@ -262,7 +258,7 @@ export default function ChatPage() {
         background: '#f5f5f5',
       }}
     >
-      {/* 聊天面板：水平居中，宽为视口的 2/3，纵向撑满（消息区最大化） */}
+      {/* 聊天面板*/}
       <div
         style={{
           width: '66.67%',
@@ -272,7 +268,7 @@ export default function ChatPage() {
           background: '#f5f5f5',
         }}
       >
-        {/* 消息区（相对定位，圆形麦克风按钮浮动右下角） */}
+        {/* 消息区 */}
         <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', position: 'relative' }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', color: '#999', paddingTop: '20vh' }}>
@@ -306,7 +302,7 @@ export default function ChatPage() {
         {/* 音量条 */}
         {volumeBars}
 
-        {/* 输入区：独立卡片（白底圆角，与聊天面板分离），回车即发送；
+        {/* 输入区：回车即发送；
             麦克风按钮固定在输入框右下角，大小适配输入框 */}
         <div style={{ padding: '8px 24px 16px' }}>
           {/* 新建会话：生成新 session_id 并清空当前对话（短期记忆重新开始） */}

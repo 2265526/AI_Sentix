@@ -132,7 +132,7 @@ function ProductImport() {
   )
 }
 
-// ---------- 类目管理（V2.2.3）----------
+// ---------- 类目管理 ----------
 const LEVEL_META = { 1: { label: '大类', color: 'blue' }, 2: { label: '中类', color: 'purple' }, 3: { label: '小类', color: 'default' } }
 
 function CategoryManager() {

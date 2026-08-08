@@ -1,9 +1,9 @@
-// API 封装：统一走 vite 代理（/v1 /rag /admin → 后端）
+// API 封装
 import axios from 'axios'
 
 const http = axios.create({ timeout: 120000 })
 
-// ---------- 监控 /v1/monitor（V2.2.2）----------
+// ---------- 监控----------
 export async function getMonitorSummary() {
   const { data } = await http.get('/v1/monitor/summary')
   return data
@@ -19,7 +19,7 @@ export async function getMonitorRequest(requestId) {
   return data
 }
 
-// 导出监控日志：触发浏览器下载附件（csv / json / txt），返回下载文件名
+// 导出监控日志
 export async function exportMonitorLog({ status = 'all', format = 'csv' } = {}) {
   const resp = await fetch(`/v1/monitor/export?status=${status}&format=${format}`, { method: 'GET' })
   if (!resp.ok) {
@@ -42,13 +42,13 @@ export async function exportMonitorLog({ status = 'all', format = 'csv' } = {}) 
   return filename
 }
 
-// ---------- 聊天 /v1/chat/text ----------
+// ---------- 聊天 ----------
 export async function chatText(message, history = [], stream = false, sessionId) {
   const { data } = await http.post('/v1/chat/text', { message, history, stream, session_id: sessionId })
   return data
 }
 
-// 流式聊天（SSE）：sessionId 会话标识（短期记忆）；onMeta / onToken / onDone 回调
+// 流式聊天（SSE）：sessionId 会话标识（短期记忆）
 export async function chatTextStream(message, history = [], sessionId, { onMeta, onToken, onDone }) {
   const resp = await fetch('/v1/chat/text', {
     method: 'POST',
@@ -80,7 +80,7 @@ export async function chatTextStream(message, history = [], sessionId, { onMeta,
   onDone?.({ type: 'done' })
 }
 
-// ---------- 阶段四：语音对话 /v1/chat/audio ----------
+// ---------- 语音对话 ----------
 // 录音上传 → 返回 mp3 音频 Blob；识别文本/回复从响应头取（URL 编码）；
 // sessionId 会话标识（短期记忆）；x-context-expired 表示后端会话过期
 export async function chatAudio(file, history = [], sessionId) {
@@ -104,13 +104,13 @@ export async function chatAudio(file, history = [], sessionId) {
   }
 }
 
-// ---------- RAG 检索 /rag/search ----------
+// ---------- RAG 检索 ----------
 export async function ragSearch(query, top_k = 5, threshold = 0.4, doc_type = null) {
   const { data } = await http.post('/rag/search', { query, top_k, threshold, doc_type })
   return data
 }
 
-// ---------- 管理 /admin ----------
+// ---------- 管理 ----------
 export async function uploadKb(file, docType) {
   const fd = new FormData()
   fd.append('file', file)
@@ -126,7 +126,7 @@ export async function importProducts(file) {
   return data
 }
 
-// ---------- 类目管理 /admin/categories（V2.2.3）----------
+// ---------- 类目管理 ----------
 export async function getCategories() {
   const { data } = await http.get('/admin/categories')
   return data

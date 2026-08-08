@@ -79,7 +79,7 @@ export default function RagPage() {
             <Descriptions.Item label="总数">{result.total}</Descriptions.Item>
           </Descriptions>
           {result.results.length === 0 && <Typography.Text type="secondary">没有通过阈值的结果。</Typography.Text>}
-          {/* 结果列表：框内滚动（不与整页滚动冲突） */}
+          {/* 结果列表：框内滚动 */}
           <div style={{ maxHeight: 'calc(100vh - 360px)', overflowY: 'auto', paddingRight: 4 }}>
             {result.results.map((r, i) => (
               <Card key={r.chunk_id} size="small" style={{ marginBottom: 8 }}>
