@@ -1,14 +1,10 @@
-# -*- coding: utf-8 -*-
 """
-core/voice/tts.py —— 语音合成（TTS）
-=====================================
-阶段四实现：使用 edge-tts（微软 Edge 在线语音接口，免 key、服务端调用）。
+语音合成（TTS）
 
+使用 edge-tts（微软 Edge 在线语音接口，免 key、服务端调用）：
 - 服务端联网即可，用户端（浏览器）零依赖，任何浏览器都能播放返回的 mp3；
 - 默认中文女声 zh-CN-XiaoxiaoNeural，可换其他音色；
 - 输入：中文文本；输出：mp3 音频字节。
-
-环境依赖：edge-tts（pip 安装）。
 """
 import asyncio
 import io

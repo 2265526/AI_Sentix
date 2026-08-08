@@ -1,17 +1,11 @@
-# -*- coding: utf-8 -*-
 """
-core/voice/asr.py —— 本地语音识别（ASR）
-=========================================
-阶段四实现：使用 faster-whisper（本地离线，无需外部 key）。
+本地语音识别（ASR）
 
-- 模型：本地 `~/whisper-small`（faster-whisper small，已从 HF 缓存复制），直接按路径加载，
-  跳过 HuggingFace 联网校验（联网校验是加载卡顿的主要来源）；可用 WHISPER_MODEL_PATH 指定其他路径；
-- 设备：自动探测——ctranslate2 检测到可用 CUDA 则用 GPU（float16），否则 CPU（int8）；
-  可用 ASR_DEVICE=cpu / cuda 强制指定；
-- 输入：音频字节（wav / mp3 / ogg / webm 等，PyAV 自动解码）；
-- 输出：简体中文文本。
-
-环境依赖：faster-whisper（pip 安装，内部依赖 PyAV，无需系统 ffmpeg）。
+使用 faster-whisper（本地离线，无需外部 key）：
+- 模型：本地 `~/whisper-small` 按路径加载，跳过 HuggingFace 联网校验（联网校验是加载卡顿主要来源），
+  可用 WHISPER_MODEL_PATH 指定其他路径；
+- 设备：自动探测——有可用 CUDA 用 GPU（float16），否则 CPU（int8），可用 ASR_DEVICE 强制指定；
+- 输入：音频字节（wav / mp3 / ogg / webm 等）；输出：简体中文文本。
 """
 import io
 import logging
@@ -26,7 +20,6 @@ logger = logging.getLogger(__name__)
 # 模型尺寸（settings.whisper_model_size，默认 small：中文准确率与速度均衡；如追求更快可改 "base"）
 _MODEL_SIZE = settings.whisper_model_size
 # 本地模型目录（~/.cache 的 HF 缓存复制版）：存在则直接加载，跳过 HuggingFace 联网校验
-# （实测每次 WhisperModel('small') 都会联网校验缓存，网络慢时加载卡几分钟）
 DEFAULT_LOCAL_MODEL = os.path.expanduser("~/whisper-small")
 # 推理设备：默认自动探测（有 CUDA 用 GPU/float16，否则 CPU/int8）；
 # 可通过环境变量 ASR_DEVICE=cpu 强制 CPU、ASR_DEVICE=cuda 强制 GPU（GPU 加载异常时回退用）
@@ -102,8 +95,7 @@ def transcribe(audio_bytes: bytes, language: Optional[str] = "zh") -> str:
         io.BytesIO(audio_bytes),
         language=language,
         beam_size=5,
-        # 不启用 VAD 过滤：实测 Silero VAD 会把低声/短句录音整段误判为静音
-        # （如 3s 音频被 "VAD filter removed 00:03.011" 全部丢弃，识别 0 字），
+        # 不启用 VAD 过滤
         # 客服语音场景录音通常干净，直接交给 whisper 转录更可靠；
         # 无语音的空白录音由上层空文本校验（422）兜底。
     )
