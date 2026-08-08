@@ -1,9 +1,0 @@
-技术栈清单：
-	后端：Python 3.12 + FastAPI + SQLAlchemy + Pydantic
-
-	LLM：deepseek-v4-flash
-
-	Embedding：OpenAI text-embedding-ada-002
-
-	向量库：PostgreSQL 12 + pgvector 0.7.4(能可视化pgadmin)
-
